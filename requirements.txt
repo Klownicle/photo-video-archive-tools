@@ -1,0 +1,4 @@
+Pillow
+pillow-heif
+send2trash
+pywin32; platform_system == "Windows"

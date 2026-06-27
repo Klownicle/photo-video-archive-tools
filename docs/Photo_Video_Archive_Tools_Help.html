@@ -1,0 +1,1294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Photo & Video Archive Tools - Current Help Guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg:#f5f7fa; --panel:#fff; --text:#1f2937; --muted:#6b7280;
+    --border:#d6dce5; --accent:#0f766e; --blue:#2563eb; --danger:#991b1b;
+    --purple:#6d28d9; --warn:#92400e; --code-bg:#111827; --code-text:#f9fafb;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; font-family:Segoe UI, Roboto, Arial, sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.5;
+  }
+  header { background:#111827; color:#fff; padding:30px 38px; }
+  header h1 { margin:0 0 8px 0; font-size:31px; }
+  header p { margin:0; color:#d1d5db; }
+  main { max-width:1220px; margin:0 auto; padding:24px; }
+  section {
+    background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:22px; margin-bottom:20px; box-shadow:0 1px 2px rgba(0,0,0,.04);
+  }
+  h2 { margin-top:0; border-bottom:1px solid var(--border); padding-bottom:8px; }
+  h3 { margin-top:22px; }
+  h4 { margin-bottom:6px; }
+  .muted { color:var(--muted); }
+  .safe, .info, .warning, .override {
+    padding:12px 14px; margin:14px 0; border-radius:8px;
+  }
+  .safe { border-left:5px solid var(--accent); background:#f0fdfa; }
+  .info { border-left:5px solid var(--blue); background:#eff6ff; }
+  .warning { border-left:5px solid var(--danger); background:#fff7f7; }
+  .override { border-left:5px solid var(--purple); background:#f5f3ff; }
+  code { background:#eef2f7; padding:2px 5px; border-radius:5px; }
+  pre {
+    background:var(--code-bg); color:var(--code-text); padding:14px;
+    border-radius:10px; overflow-x:auto; white-space:pre-wrap; word-break:break-word;
+  }
+  pre code { background:transparent; padding:0; color:inherit; }
+  table { width:100%; border-collapse:collapse; margin:12px 0; }
+  th, td { border:1px solid var(--border); padding:9px 10px; vertical-align:top; }
+  th { background:#eef2f7; text-align:left; }
+  .flow { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; }
+  .flow-card { background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:14px; }
+  .flow-card h3 { margin-top:0; margin-bottom:6px; }
+  .tag {
+    display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px;
+    background:#e0f2fe; color:#075985; margin-right:4px; margin-bottom:4px;
+  }
+  .tag.green { background:#dcfce7; color:#166534; }
+  .tag.orange { background:#ffedd5; color:#9a3412; }
+  .tag.purple { background:#ede9fe; color:#5b21b6; }
+  .tag.red { background:#fee2e2; color:#991b1b; }
+  .toc a { display:block; padding:3px 0; color:#0f766e; text-decoration:none; }
+  .toc a:hover { text-decoration:underline; }
+  .small { font-size:13px; }
+  @media (max-width:1000px) { .flow { grid-template-columns:1fr 1fr; } }
+  @media (max-width:700px) {
+    .flow { grid-template-columns:1fr; }
+    main { padding:14px; }
+    header { padding:22px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Photo & Video Archive Tools</h1>
+  <p>Public help guide for installation, file placement, renaming, CatchUp renaming, local FFmpeg setup, image/video duplicate detection, central review, confirmed delete processing, and final image/video metadata + sidecar correction.</p>
+</header>
+
+<main>
+
+<section id="current-structure">
+  <h2>Example Working Structure</h2>
+  <p>This section uses generic example paths suitable for public documentation. Replace these paths with your own tool folder and media archive root.</p>
+
+  <table>
+    <thead>
+      <tr><th>Item</th><th>Example Path / Name</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Tool folder</td><td><code>C:\MediaArchiveTools</code></td><td>Run commands from this folder so state, logs, reports, installers, and caches land in the expected place.</td></tr>
+      <tr><td>Archive root</td><td><code>D:\MediaArchive\Photos and Videos</code></td><td>Root archive folder containing album subfolders.</td></tr>
+      <tr><td>Rename script</td><td><code>Rename-PhotosVideos-ExifTool.py</code></td><td>Normal rename, review CSV rename, metadata-date-on-confirm, filesystem date setting, and <code>-CatchUp</code> mode.</td></tr>
+      <tr><td>Corrective script</td><td><code>Correct-ImageVideoMetadataFromFilename.py</code></td><td>Final metadata/tag/sidecar pass, including <code>-ResetExistingTags</code>.</td></tr>
+      <tr><td>Image duplicate finder/processor</td><td><code>Find-SimilarImages-ReviewDelete.py</code></td><td>Find visual image duplicates and process confirmed image delete rows.</td></tr>
+      <tr><td>Video duplicate finder/processor</td><td><code>Find-SimilarVideos-ReviewDelete.py</code></td><td>Find visually similar videos using FFmpeg/FFprobe frame sampling and process confirmed video delete rows, including sidecars by default.</td></tr>
+      <tr><td>Central duplicate review UI</td><td><code>Review-SimilarFiles.py</code></td><td>Browser UI for reviewing both image and video duplicate CSVs. Replaces the image-only reviewer for normal use.</td></tr>
+      <tr><td>FFmpeg installer</td><td><code>Install-FFmpeg-ForArchiveTool.ps1</code></td><td>Installs FFmpeg/FFprobe locally under the tool folder.</td></tr>
+      <tr><td>Local FFmpeg folder</td><td><code>.\ffmpeg\bin</code></td><td>Expected local location for <code>ffmpeg.exe</code> and <code>ffprobe.exe</code>.</td></tr>
+      <tr><td>Optional FFmpeg path helper</td><td><code>ffmpeg_paths.ps1</code></td><td>Optional troubleshooting/convenience file created by the installer. The Python tools do not require it.</td></tr>
+      <tr><td>Rename state</td><td><code>photo_rename_state.json</code></td><td>Global sequence counter. Do not delete unless intentionally restarting numbering.</td></tr>
+      <tr><td>Rename log</td><td><code>photo_rename_log.csv</code></td><td>Append-only rename history.</td></tr>
+      <tr><td>Image duplicate cache</td><td><code>similar_image_hash_cache.sqlite</code></td><td>Perceptual hash cache for image duplicate analysis.</td></tr>
+      <tr><td>Video duplicate cache</td><td><code>similar_video_hash_cache.sqlite</code></td><td>FFprobe/frame-hash cache for video duplicate analysis.</td></tr>
+      <tr><td>Reports folder</td><td><code>duplicate_reports</code></td><td>Default local folder for duplicate review, pair, inventory, summary, and process reports.</td></tr>
+      <tr><td>Help file</td><td><code>Photo_Video_Archive_Tools_Help.html</code></td><td>This guide.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="safe">
+    <strong>Run from the tool folder:</strong>
+    <pre><code>Set-Location "C:\MediaArchiveTools"</code></pre>
+  </div>
+
+  <div class="info">
+    <strong>Public documentation note:</strong> paths in this guide are examples. Replace <code>C:\MediaArchiveTools</code> with your script/tool folder and <code>D:\MediaArchive\Photos and Videos</code> with your own media archive root.
+  </div>
+
+</section>
+
+
+<section id="overall-goal">
+  <h2>Overall Goal of These Tools</h2>
+
+  <p>The purpose of this toolset is to take a messy photo/video archive and turn it into a structured, safer-to-review, de-duplicated, metadata-aware archive.</p>
+
+  <p>The tools are designed for a common real-world situation:</p>
+
+  <ul>
+    <li>You have some files already partially sorted into folders or albums.</li>
+    <li>You have many loose files in a general holding folder such as <code>Needs Categorized</code>.</li>
+    <li>Some files have good embedded dates, some have missing/bad metadata, and some are older videos where embedded metadata cannot be safely written.</li>
+    <li>Many files may share original camera names such as <code>IMG_0001.JPG</code> or <code>MOV_0001.MOV</code>, so dumping everything into one folder would risk overwrites and make manual comparison harder.</li>
+    <li>You need unique filenames before you can safely consolidate, compare, de-dupe, tag, and organize.</li>
+  </ul>
+
+  <div class="safe">
+    <strong>Core strategy:</strong> rename first to create unique stable filenames, use folder context carefully for files missing dates, remove confirmed duplicates, then run the corrective metadata/tag/sidecar pass after the archive structure is stable.
+  </div>
+
+  <h3>What problem this solves</h3>
+  <p>A large personal media archive usually has several overlapping problems: repeated camera filenames, partial manual organization, exported or downloaded copies, recompressed videos, missing EXIF dates, old video formats, and broad catch-all folders. These tools separate that problem into controlled stages.</p>
+
+  <h3>Why rename first?</h3>
+  <p>Renaming gives every supported media file a unique archive-safe name:</p>
+
+  <pre><code>YYYY-MM-DD_0000000001_IMG.ext
+YYYY-MM-DD_0000000002_VID.ext</code></pre>
+
+  <p>This makes later steps safer because files no longer depend on fragile camera names that may repeat across devices, exports, downloads, or folders.</p>
+
+  <h3>Why not immediately dump everything into one folder?</h3>
+  <p>For large archives, dumping everything into one folder can create overwrite risk and an overwhelming manual review problem. A safer approach is to keep partially sorted folders, move unknown items into a general holding folder, then normalize filenames across the whole archive.</p>
+
+  <h3>Why manually group some files before CatchUp?</h3>
+  <p>CatchUp can infer dates from already-renamed files in the same immediate folder, but only when that folder provides meaningful context. For example, an undated file placed into a folder full of already-renamed photos from one trip or event has much better date context than an undated file sitting in a giant mixed-year holding folder.</p>
+
+  <div class="warning">
+    <strong>Important:</strong> CatchUp is not intended to magically date unrelated files in a broad mixed folder. With the default safeguards, broad mixed-date folders should be rejected if the date span is too wide. If you force or loosen the safeguards, inferred dates may reflect the broad folder context rather than the true event date.
+  </div>
+
+  <h3>Why de-dupe after renaming and grouping?</h3>
+  <p>Duplicate detection is easier and safer after filenames are unique and the archive structure is closer to its final form. Image and video duplicate review can then compare files across the chosen scan root, while the reviewed CSV provides a controlled delete process where only confirmed delete rows are processed.</p>
+
+  <h3>Why run the corrective script last?</h3>
+  <p>The corrective script uses the current parent folder name as the tag/keyword source. If you run it before the archive is organized, tags may reflect temporary folders instead of meaningful final folders. Running it last lets the script set image tags and video sidecars based on the final folder structure.</p>
+
+  <h3>End result</h3>
+  <p>After the full workflow, the archive should have:</p>
+
+  <ul>
+    <li>Unique archive filenames.</li>
+    <li>Reduced duplicates.</li>
+    <li>More reliable filename-derived dates for files that had missing metadata.</li>
+    <li>Parent-folder tags on images where supported.</li>
+    <li>XMP sidecars for videos, including older formats where embedded metadata writing is not practical.</li>
+    <li>A clearer folder structure that can be imported into other tools more cleanly.</li>
+  </ul>
+</section>
+
+
+<section id="needs-categorized">
+  <h2>Why Use a Needs Categorized Holding Folder?</h2>
+
+  <p>A <code>Needs Categorized</code> folder is useful when you already have some meaningful album/event folders, but you also have a large set of loose or unknown photos and videos that are not ready to place yet.</p>
+
+  <div class="safe">
+    <strong>Best use:</strong> treat <code>Needs Categorized</code> as a safe staging area. It lets you keep unknown files separate, rename them into unique archive-safe filenames, and review them without mixing them into existing album folders too early.
+  </div>
+
+  <h3>Why this helps when you already have existing album folders</h3>
+  <p>If your archive already contains folders such as trips, holidays, family events, school events, or old camera imports, those folders may contain useful context. Keeping those existing folders intact has several benefits:</p>
+
+  <ul>
+    <li>It avoids dumping thousands of files into one overwhelming folder.</li>
+    <li>It reduces overwrite risk from repeated camera filenames such as <code>IMG_0001.JPG</code> or <code>MOV_0001.MOV</code>.</li>
+    <li>It preserves clues from the current folder structure while you normalize filenames.</li>
+    <li>It lets already-sorted folders become useful context for later CatchUp date inference.</li>
+    <li>It gives you a controlled place to put files that still need human review.</li>
+  </ul>
+
+  <h3>Recommended pattern</h3>
+  <ol>
+    <li>Keep existing meaningful folders where they are.</li>
+    <li>Move unknown or loose files into <code>Needs Categorized</code>.</li>
+    <li>Run the rename script so files receive unique archive-safe names where metadata dates are available.</li>
+    <li>Review files that still could not be dated or renamed.</li>
+    <li>Move identifiable undated files into the correct related album/event folder.</li>
+    <li>Run CatchUp after that manual grouping so same-folder date inference has meaningful context.</li>
+    <li>Run duplicate detection and corrective metadata/tagging after the archive structure is closer to final.</li>
+  </ol>
+
+  <h3>What Needs Categorized is good for</h3>
+  <table>
+    <thead><tr><th>Good use</th><th>Why it helps</th></tr></thead>
+    <tbody>
+      <tr><td>Temporary holding area for unknown files</td><td>Keeps unknown files separate from known album/event folders.</td></tr>
+      <tr><td>Safe place to normalize filenames</td><td>Files can be renamed uniquely before they are moved into final folders.</td></tr>
+      <tr><td>Manual review queue</td><td>Anything still unresolved can be reviewed later without contaminating meaningful folders.</td></tr>
+      <tr><td>Staging area before final organization</td><td>After filenames are unique, files are easier to preview, compare, and move safely.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>What Needs Categorized is not good for</h3>
+  <table>
+    <thead><tr><th>Risky use</th><th>Why to avoid it</th></tr></thead>
+    <tbody>
+      <tr><td>Using it as a date source for unrelated files</td><td>A broad mixed folder may contain many years/events, so folder-based date inference can be wrong or rejected by safeguards.</td></tr>
+      <tr><td>Leaving final files there permanently</td><td>The corrective script uses the parent folder as the tag source. A final tag of <code>Needs Categorized</code> is usually not useful.</td></tr>
+      <tr><td>Running CatchUp before manual grouping</td><td>CatchUp works best when the immediate folder contains related already-renamed files with a tight date range.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warning">
+    <strong>Important:</strong> <code>Needs Categorized</code> should not be treated as a reliable date-inference folder. It is a staging and review folder. For undated files, move them into a specific related folder first when possible, or manually confirm the date in the review CSV.
+  </div>
+
+  <h3>How this interacts with CatchUp</h3>
+  <p>CatchUp can estimate a date from already-renamed files in the same immediate folder. That is powerful only when the folder is meaningful. For example:</p>
+
+  <pre><code>D:\MediaArchive\Photos and Videos\Beach Trip - 2020
+  2020-07-14_0000001234_IMG.jpg
+  2020-07-14_0000001235_IMG.jpg
+  2020-07-15_0000001236_VID.mp4
+  IMG_0042.JPG</code></pre>
+
+  <p>In that example, <code>IMG_0042.JPG</code> may be a reasonable CatchUp candidate because the folder contains related already-renamed files with a narrow date range.</p>
+
+  <p>By contrast:</p>
+
+  <pre><code>D:\MediaArchive\Photos and Videos\Needs Categorized
+  2012-05-01_0000000100_IMG.jpg
+  2018-11-20_0000002222_IMG.jpg
+  2024-03-10_0000009876_VID.mp4
+  IMG_0042.JPG</code></pre>
+
+  <p>That folder is too broad to be a reliable date source. The correct move is to manually identify <code>IMG_0042.JPG</code>, move it into the applicable related folder, or manually confirm its date through the CSV.</p>
+
+  <h3>How this interacts with the corrective script</h3>
+  <p>The corrective script adds the immediate parent folder name as an image tag or video sidecar tag. Because <code>Needs Categorized</code> is a temporary staging folder, the script intentionally avoids adding that folder name as a tag. After files are moved into meaningful folders, rerun the corrective script so tags and sidecars reflect the final folder names.</p>
+</section>
+
+<section id="quick-answers">
+  <h2>Quick Answers From the Latest Changes</h2>
+
+  <h3>Does <code>ffmpeg_paths.ps1</code> have to exist?</h3>
+  <p>No. The video finder auto-detects the local FFmpeg install from <code>.\ffmpeg\bin\ffmpeg.exe</code> and <code>.\ffmpeg\bin\ffprobe.exe</code>. The <code>ffmpeg_paths.ps1</code> file is only an optional helper created by the installer after it verifies the paths.</p>
+
+  <div class="info">
+    You can delete <code>ffmpeg_paths.ps1</code> and the current Python tools should still work. If you rerun the FFmpeg installer, it may recreate the file.
+  </div>
+
+  <h3>Does <code>-ResetExistingTags</code> also update video sidecars?</h3>
+  <p>Yes, in the current ResetTags-capable corrective script, <code>-ResetExistingTags</code> clears/reset image tag fields and also rewrites existing video sidecars so stale sidecar tags are replaced with the current folder tag/date values.</p>
+
+  <div class="safe">
+    You do <strong>not</strong> need to also pass <code>-UpdateExistingSidecars</code> when running a reset pass. Use <code>-UpdateExistingSidecars</code> by itself when you only want to rewrite existing video sidecars without doing the broader image tag reset.
+  </div>
+
+  <h3>Verify your corrective script has the reset-capable options</h3>
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py -h | findstr /I "ResetExistingTags UpdateExistingSidecars"</code></pre>
+
+  <p>If <code>ResetExistingTags</code> does not appear, replace the corrective script with the current ResetTags-capable version before relying on reset behavior.</p>
+</section>
+
+<section id="overview">
+  <h2>Overview</h2>
+  <p>This guide reflects the current workflow after the latest script changes. Use the final generic script names below, even if your downloaded file had a temporary patch name.</p>
+
+  <table>
+    <thead>
+      <tr><th>Final Script Name</th><th>Purpose</th><th>Safe Default</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>Rename-PhotosVideos-ExifTool.py</code></td><td>Renames photos/videos into the archive filename format. Supports confirmed CSV dates, metadata-date setting for supported files, filesystem date setting, remaining CSV output, MPG/MPEG metadata-skip handling, skips already-renamed files during normal scans, and includes CatchUp mode for leftover unrenamed files.</td><td>Run with <code>-WhatIf</code> first.</td></tr>
+      <tr><td><code>Find-SimilarImages-ReviewDelete.py</code></td><td>Finds visually similar image duplicates and later processes confirmed image delete rows from a reviewed CSV.</td><td>Analysis is read-only. Process mode should be run with <code>-WhatIf</code> first.</td></tr>
+      <tr><td><code>Find-SimilarVideos-ReviewDelete.py</code></td><td>Finds visually similar video duplicates using FFprobe metadata and FFmpeg frame sampling. Later processes confirmed video delete rows and sidecar deletes.</td><td>Analysis is read-only. Process mode should be run with <code>-WhatIf</code> first.</td></tr>
+      <tr><td><code>Review-SimilarFiles.py</code></td><td>Central local browser UI for reviewing image and video duplicate groups. Supports multiple keepers, filters, video previews where browser-supported, override suggestions, and bulk confirmation.</td><td>Yes. It does not delete files.</td></tr>
+      <tr><td><code>Correct-ImageVideoMetadataFromFilename.py</code></td><td>Final corrective pass for renamed images/videos. Images get Date Taken and folder tags where supported. Videos get <code>video_file.ext.xmp</code> sidecars. <code>-ResetExistingTags</code> resets stale image tags and rewrites existing sidecars.</td><td>Run with <code>-WhatIf</code> first.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="safe">
+    <strong>Current recommended order:</strong> install prerequisites, place files, rename, consolidate/combine folders where possible, run CatchUp for leftovers, install/test FFmpeg for video duplicate work, find duplicate candidates, review/process duplicates, and run the corrective metadata/tagging/sidecar pass last.
+  </div>
+
+  <div class="flow">
+    <div class="flow-card"><h3>0. Install</h3><p>Install Python, packages, ExifTool, FFmpeg.</p><p><span class="tag red">setup</span></p></div>
+    <div class="flow-card"><h3>1. Rename</h3><p>Rename media using metadata or confirmed CSV dates.</p><p><span class="tag">ExifTool</span><span class="tag">CSV</span></p></div>
+    <div class="flow-card"><h3>1b. CatchUp</h3><p>Rename leftover unrenamed files using guarded folder context.</p><p><span class="tag orange">leftovers</span></p></div>
+    <div class="flow-card"><h3>2. Find Dupes</h3><p>Analyze images/videos and create review CSVs.</p><p><span class="tag">read-only</span></p></div>
+    <div class="flow-card"><h3>3. Review/Delete</h3><p>Confirm deletes in reviewer, save CSV, process.</p><p><span class="tag purple">review</span></p></div>
+    <div class="flow-card"><h3>4. Correct Metadata</h3><p>Backfill Date Taken, folder tags, sidecars.</p><p><span class="tag green">final</span></p></div>
+  </div>
+</section>
+
+
+<section class="toc">
+  <h2>Contents</h2>
+  <a href="#current-structure">Example Working Structure</a>
+  <a href="#overall-goal">Overall Goal of These Tools</a>
+  <a href="#needs-categorized">Why Use a Needs Categorized Holding Folder?</a>
+  <a href="#quick-answers">Quick Answers From the Latest Changes</a>
+  <a href="#installation">Installation and First-Time Setup</a>
+  <a href="#requirements">Requirements</a>
+  <a href="#placement">Where to Place Files</a>
+  <a href="#ffmpeg">Local FFmpeg / FFprobe Setup</a>
+  <a href="#step-by-step">Step-by-Step Example Workflow: Creating and Starting From Scratch</a>
+  <a href="#adding-to-existing">Adding New Files/Folders Later</a>
+  <a href="#filename-format">Archive Filename Format</a>
+  <a href="#rename">Rename-PhotosVideos-ExifTool.py</a>
+  <a href="#post-rename-consolidation">Post-Rename Consolidation Step</a>
+  <a href="#catchup">CatchUp Rename Mode</a>
+  <a href="#find-images">Find-SimilarImages-ReviewDelete.py</a>
+  <a href="#find-videos">Find-SimilarVideos-ReviewDelete.py</a>
+  <a href="#review-files">Review-SimilarFiles.py</a>
+  <a href="#duplicate-keeper-logic">How KEEP / DELETE Suggestions Are Determined</a>
+  <a href="#windows-tags">Windows Explorer Tags / System.Keywords</a>
+  <a href="#corrective">Correct-ImageVideoMetadataFromFilename.py</a>
+  <a href="#workflows">Current Recommended Workflows</a>
+  <a href="#csv-rules">CSV Rules</a>
+  <a href="#mpg">MPG/MPEG and Video Metadata Direction</a>
+  <a href="#troubleshooting">Troubleshooting</a>
+</section>
+
+
+<section id="installation">
+  <h2>Installation and First-Time Setup</h2>
+
+  <h3>Required versions</h3>
+  <table>
+    <thead><tr><th>Component</th><th>Recommended</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Windows</td><td>Windows 10 or Windows 11</td><td>PowerShell commands and Recycle Bin behavior are Windows-focused.</td></tr>
+      <tr><td>Python</td><td>Python 3.11 or newer recommended</td><td>Python 3.10+ should generally work, but Python 3.11 is the tested baseline used here.</td></tr>
+      <tr><td>Pillow</td><td>Current pip version</td><td>Required for thumbnails, image hashing, and video frame hash processing.</td></tr>
+      <tr><td>pillow-heif</td><td>Current pip version</td><td>Recommended for HEIC/HEIF support.</td></tr>
+      <tr><td>send2trash</td><td>Current pip version</td><td>Required for safe Recycle Bin delete processing.</td></tr>
+      <tr><td>ExifTool</td><td>Installed at <code>C:\Tools\ExifTool\exiftool.exe</code></td><td>Used by rename and corrective metadata scripts.</td></tr>
+      <tr><td>FFmpeg / FFprobe</td><td>Local tool-folder install</td><td>Required only for video duplicate analysis.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Install Python</h3>
+  <ol>
+    <li>Download and install Python for Windows.</li>
+    <li>During install, check <strong>Add python.exe to PATH</strong>.</li>
+    <li>After install, open a new PowerShell window.</li>
+    <li>Verify Python and pip:</li>
+  </ol>
+
+  <pre><code>python --version
+pip --version</code></pre>
+
+  <div class="warning">
+    If <code>python</code> is not recognized, close and reopen PowerShell. If it still fails, repair/reinstall Python and make sure the PATH option is selected.
+  </div>
+
+  <h3>Install Python package requirements</h3>
+  <pre><code>python -m pip install --upgrade pip
+python -m pip install Pillow pillow-heif send2trash pywin32</code></pre>
+
+  <h3>Verify Python packages</h3>
+  <pre><code>python -c "import PIL; print('Pillow OK')"
+python -c "import send2trash; print('send2trash OK')"
+python -c "import pillow_heif; print('pillow-heif OK')"</code></pre>
+
+  <h3>Install ExifTool</h3>
+  <p>The scripts expect ExifTool here by default:</p>
+  <pre><code>C:\Tools\ExifTool\exiftool.exe</code></pre>
+
+  <p>Verify it:</p>
+  <pre><code>&amp; "C:\Tools\ExifTool\exiftool.exe" -ver</code></pre>
+
+  <p>If ExifTool is somewhere else, pass the path explicitly:</p>
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ExifTool "C:\Path\To\exiftool.exe" `
+  -WhatIf</code></pre>
+
+  <h3>Install FFmpeg for video duplicate analysis</h3>
+  <p>Use the local installer included with the tool folder:</p>
+  <pre><code>Set-Location "C:\MediaArchiveTools"
+
+.\Install-FFmpeg-ForArchiveTool.ps1 -Force</code></pre>
+
+  <p>If PowerShell blocks the script for the current session:</p>
+  <pre><code>Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+.\Install-FFmpeg-ForArchiveTool.ps1 -Force</code></pre>
+
+  <p>Verify FFmpeg and FFprobe:</p>
+  <pre><code>.\ffmpeg\bin\ffmpeg.exe -version
+.\ffmpeg\bin\ffprobe.exe -version</code></pre>
+</section>
+
+<section id="requirements">
+  <h2>Requirements</h2>
+
+  <h3>Python</h3>
+  <pre><code>python --version</code></pre>
+
+  <h3>ExifTool</h3>
+  <pre><code>C:\Tools\ExifTool\exiftool.exe</code></pre>
+
+  <h3>FFmpeg / FFprobe</h3>
+  <pre><code>C:\MediaArchiveTools\ffmpeg\bin\ffmpeg.exe
+C:\MediaArchiveTools\ffmpeg\bin\ffprobe.exe</code></pre>
+
+  <h3>Python Packages</h3>
+  <pre><code>python -m pip install Pillow pillow-heif send2trash pywin32</code></pre>
+
+  <table>
+    <thead><tr><th>Package</th><th>Used By</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>Pillow</code></td><td>Image duplicate finder/reviewer and video frame hashing</td><td>Reads images, creates thumbnails, and hashes FFmpeg-sampled video frames.</td></tr>
+      <tr><td><code>pillow-heif</code></td><td>Image duplicate finder/reviewer</td><td>HEIC/HEIF image support.</td></tr>
+      <tr><td><code>send2trash</code></td><td>Image/video delete processors</td><td>Sends confirmed deletes to the Recycle Bin.</td></tr>
+      <tr><td><code>pywin32</code></td><td>Corrective script optional Windows tag writes</td><td>Writes Windows Explorer Tags / System.Keywords where the Windows property handler supports it.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="placement">
+  <h2>Where to Place Files</h2>
+
+  <p>Place the tool scripts directly in:</p>
+  <pre><code>C:\MediaArchiveTools</code></pre>
+
+  <h3>Expected final file list</h3>
+  <pre><code>C:\MediaArchiveTools
+  Correct-ImageVideoMetadataFromFilename.py
+  Find-SimilarImages-ReviewDelete.py
+  Find-SimilarVideos-ReviewDelete.py
+  Install-FFmpeg-ForArchiveTool.ps1
+  Photo_Video_Archive_Tools_Help.html
+  Rename-PhotosVideos-ExifTool.py
+  Review-SimilarFiles.py
+  duplicate_reports\
+  ffmpeg\
+  photo_rename_state.json
+  photo_rename_log.csv
+  similar_image_hash_cache.sqlite
+  similar_video_hash_cache.sqlite</code></pre>
+
+  <div class="info">
+    Some files are created automatically as you use the tools, including the state JSON, logs, caches, report CSVs, and reviewed CSVs.
+  </div>
+
+  <h3>Use clean final names</h3>
+  <p>If a downloaded patch file has a temporary name such as <code>-v3.py</code> or <code>-Fixed.ps1</code>, rename it to the clean final name listed above after replacing the older version.</p>
+</section>
+
+<section id="ffmpeg">
+  <h2>Local FFmpeg / FFprobe Setup</h2>
+
+  <p>FFmpeg is used by <code>Find-SimilarVideos-ReviewDelete.py</code> to sample frames from videos. FFprobe is used to read duration and dimensions.</p>
+
+  <h3>Install locally into the tool folder</h3>
+  <pre><code>Set-Location "C:\MediaArchiveTools"
+
+.\Install-FFmpeg-ForArchiveTool.ps1 -Force</code></pre>
+
+  <h3>Verify local executables</h3>
+  <pre><code>.\ffmpeg\bin\ffmpeg.exe -version
+.\ffmpeg\bin\ffprobe.exe -version</code></pre>
+
+  <div class="warning">
+    <strong>Do not run <code>.\ffmpeg</code> by itself.</strong> <code>ffmpeg</code> is the folder. The executable is <code>.\ffmpeg\bin\ffmpeg.exe</code>.
+  </div>
+
+  <h3>What <code>ffmpeg_paths.ps1</code> is</h3>
+  <p>The installer creates <code>ffmpeg_paths.ps1</code> as a simple helper showing the local FFmpeg/FFprobe paths. It is optional.</p>
+
+  <pre><code>$FFmpegPath = "C:\MediaArchiveTools\ffmpeg\bin\ffmpeg.exe"
+$FFprobePath = "C:\MediaArchiveTools\ffmpeg\bin\ffprobe.exe"</code></pre>
+
+  <div class="info">
+    The Python video finder does not require <code>ffmpeg_paths.ps1</code>. It auto-detects <code>.\ffmpeg\bin</code> directly. Keep the file for troubleshooting, or delete it if you want a cleaner tool folder.
+  </div>
+</section>
+
+
+<section id="step-by-step">
+  <h2>Step-by-Step Example Workflow: Creating and Starting From Scratch</h2>
+
+  <p>This workflow is for the first time you are cleaning up a large messy archive. It is written as a teaching workflow, not just a list of commands. The exact order matters because each step makes the next step safer.</p>
+
+  <div class="info">
+    <strong>Example scenario:</strong> you have a large archive with some files already partially sorted into folders, plus a large general holding folder such as <code>Needs Categorized</code>. Some files have reliable dates, some do not, and many old camera filenames may repeat.
+  </div>
+
+  <h3>Step 0 — Install prerequisites and open PowerShell in the tool folder</h3>
+  <p>Before touching the archive, make sure Python, required Python packages, ExifTool, and FFmpeg are available. Then run all commands from the tool folder so logs, state files, reports, and caches stay together.</p>
+
+  <pre><code>Set-Location "C:\MediaArchiveTools"
+
+python --version
+python -m pip show Pillow
+python -m pip show send2trash
+&amp; "C:\Tools\ExifTool\exiftool.exe" -ver
+.\ffmpeg\bin\ffmpeg.exe -version
+.\ffmpeg\bin\ffprobe.exe -version</code></pre>
+
+  <p><strong>Why this matters:</strong> the rename and corrective tools need ExifTool; the image/video reviewers need Python image packages; the video duplicate finder needs FFmpeg/FFprobe.</p>
+
+  <h3>Step 1 — Start with your existing partial organization</h3>
+  <p>Do not immediately dump everything into one massive folder. Keep folders that are already meaningful, such as event folders, trip folders, family folders, or partially sorted albums. Put truly unknown files into a general holding folder such as <code>Needs Categorized</code>. See <a href="#needs-categorized">Why Use a Needs Categorized Holding Folder?</a> for the reason this staging folder is useful.</p>
+
+  <pre><code>D:\MediaArchive\Photos and Videos
+  Birthday Party - 2018
+  Beach Trip - 2020
+  Old Phone Export
+  Needs Categorized</code></pre>
+
+  <p><strong>Why this matters:</strong> many cameras and phones reuse names like <code>IMG_0001.JPG</code>. Keeping the starting folders avoids overwrite risk and preserves clues that may help with later manual review.</p>
+
+  <h3>Step 2 — Preview the initial rename</h3>
+  <p>The first rename pass reads metadata dates where available and gives files unique archive-safe filenames. Run <code>-WhatIf</code> first so you can see what would happen without changing anything.</p>
+
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -WhatIf</code></pre>
+
+  <p><strong>Why this matters:</strong> once files have unique names, they are much safer to move, compare, review, and de-dupe. This reduces the risk of overwriting repeated camera filenames.</p>
+
+  <h3>Step 3 — Run the initial rename live</h3>
+  <p>If the preview looks correct, run the rename for real.</p>
+
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos"</code></pre>
+
+  <p><strong>Result:</strong> files with usable metadata dates are renamed into the archive format. Files without usable dates remain unresolved and may be written to a review CSV depending on the options used.</p>
+
+  <h3>Step 4 — Review files that still did not get renamed</h3>
+  <p>After the initial rename, focus on the remaining non-renamed files. These are usually the files with missing/bad metadata or unsupported date fields.</p>
+
+  <p>At this point you have three choices:</p>
+
+  <table>
+    <thead><tr><th>Situation</th><th>Recommended action</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>You can tell what event/folder the file belongs to.</td><td>Manually move it into the applicable folder with related already-renamed files.</td><td>This gives CatchUp meaningful same-folder date context.</td></tr>
+      <tr><td>You cannot identify the file yet.</td><td>Leave it in <code>Needs Categorized</code> or manually enter a date in the review CSV.</td><td>Guessing from a broad mixed folder is risky.</td></tr>
+      <tr><td>The file belongs to a new event not already represented.</td><td>Create a specific folder for that event/date range if known, or use manual CSV date confirmation.</td><td>Specific folders produce safer tags and safer date inference later.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warning">
+    <strong>Do not treat a giant holding folder as reliable date context.</strong> If a folder contains years of unrelated files, any inferred date from that folder is much less meaningful. Use manual grouping or manual CSV confirmation instead.
+  </div>
+
+  <h3>Step 5 — Run CatchUp after manual grouping</h3>
+  <p>CatchUp is for the remaining unrenamed files after you have done some manual grouping. It first asks ExifTool for dates on only the leftover unrenamed files. If ExifTool still cannot find a date, CatchUp can infer a date from already-renamed files in the same immediate folder, subject to safeguards.</p>
+
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -CatchUp `
+  -CatchUpMinFolderDates 3 `
+  -CatchUpMaxFolderDateSpanDays 45 `
+  -CatchUpReviewCsv ".\photo_rename_catchup_missing_dates.csv" `
+  -WriteMissingCsvInWhatIf `
+  -WhatIf</code></pre>
+
+  <p>If the preview is correct:</p>
+
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -CatchUp `
+  -CatchUpMinFolderDates 3 `
+  -CatchUpMaxFolderDateSpanDays 45 `
+  -CatchUpReviewCsv ".\photo_rename_catchup_missing_dates.csv"</code></pre>
+
+  <p><strong>Why you would do CatchUp:</strong> it avoids rescanning the whole completed archive with ExifTool and focuses only on leftover unrenamed files. It also uses the folder context you created manually.</p>
+
+  <p><strong>When not to rely on CatchUp:</strong> if the file is still sitting in a broad mixed folder and the folder contains unrelated dates, use the review CSV and manually set the date instead.</p>
+
+  <h3>Step 6 — Process any CatchUp review CSV rows manually</h3>
+  <p>If CatchUp still cannot safely date some files, it writes them to a CSV. Open the CSV, review the file, and set:</p>
+
+  <pre><code>Decision = CONFIRM
+DateToUse = YYYY-MM-DD</code></pre>
+
+  <p>Then preview and process that CSV:</p>
+
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -ReviewCsv ".\photo_rename_catchup_missing_dates.csv" `
+  -WhatIf
+
+python .\Rename-PhotosVideos-ExifTool.py `
+  -ReviewCsv ".\photo_rename_catchup_missing_dates.csv"</code></pre>
+
+  <p><strong>Why this matters:</strong> manual date confirmation is safer than letting a broad folder guess dates for unrelated files.</p>
+
+  <h3>Step 7 — Decide whether to organize more before de-dupe</h3>
+  <p>At this point, the filenames are unique and most dates should be represented in the filenames. If your files are still mostly in a general holding folder, this is a good time to do more manual organization into meaningful subfolders.</p>
+
+  <p><strong>If your files are already in meaningful folders:</strong> continue to duplicate detection.</p>
+
+  <p><strong>If your files are not organized yet:</strong> use the new unique filenames and date information to create folders first. After folder organization, run the corrective script later so tags reflect the final parent folder names.</p>
+
+  <h3>Step 8 — Find image duplicates</h3>
+  <p>Run the image duplicate finder after filenames are stable and after you have consolidated enough folders under one scan root for duplicates to be compared.</p>
+
+  <pre><code>python .\Find-SimilarImages-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -Workers 16</code></pre>
+
+  <p><strong>Why this matters:</strong> the image finder can detect visually similar copies even when files have been renamed, resized, or recompressed.</p>
+
+  <h3>Step 9 — Find video duplicates</h3>
+  <p>Run the video duplicate finder separately. Video comparison is more expensive because it samples frames with FFmpeg.</p>
+
+  <pre><code>python .\Find-SimilarVideos-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -SamplePoints "0.25,0.50,0.75" `
+  -FFmpegTimeoutSeconds 8</code></pre>
+
+  <p><strong>Why videos are separate:</strong> videos may have different compression, resolution, or file size while still showing the same content. The video finder uses duration and sampled frames rather than relying only on filename or file size.</p>
+
+  <h3>Step 10 — Review duplicate CSVs in the central reviewer</h3>
+  <p>Open the image or video review CSV in <code>Review-SimilarFiles.py</code>. The reviewer does not delete anything. It only helps you mark keep/delete decisions and save a reviewed CSV.</p>
+
+  <pre><code>python .\Review-SimilarFiles.py `
+  -Csv ".\duplicate_reports\&lt;timestamp&gt;_similar_images_review.csv"
+
+python .\Review-SimilarFiles.py `
+  -Csv ".\duplicate_reports\&lt;timestamp&gt;_similar_videos_review.csv"</code></pre>
+
+  <p><strong>Why this matters:</strong> the review step is the safety gate. The delete processors only act on rows where <code>SuggestedAction=DELETE</code> and <code>ConfirmDelete=CONFIRM</code>.</p>
+
+  <h3>Step 11 — Process confirmed duplicate deletes with WhatIf first</h3>
+  <p>After saving a reviewed CSV, run the processor in <code>-WhatIf</code> mode first.</p>
+
+  <pre><code>python .\Find-SimilarImages-ReviewDelete.py `
+  -Process `
+  -Csv ".\duplicate_reports\&lt;reviewed_image_csv&gt;.csv" `
+  -WhatIf
+
+python .\Find-SimilarVideos-ReviewDelete.py `
+  -Process `
+  -Csv ".\duplicate_reports\&lt;reviewed_video_csv&gt;.csv" `
+  -WhatIf</code></pre>
+
+  <p><strong>Why this matters:</strong> <code>-WhatIf</code> shows what would be deleted before anything is sent to the Recycle Bin.</p>
+
+  <h3>Step 12 — Process confirmed duplicate deletes live</h3>
+  <p>If the <code>-WhatIf</code> output is correct, run the live processor.</p>
+
+  <pre><code>python .\Find-SimilarImages-ReviewDelete.py `
+  -Process `
+  -Csv ".\duplicate_reports\&lt;reviewed_image_csv&gt;.csv"
+
+python .\Find-SimilarVideos-ReviewDelete.py `
+  -Process `
+  -Csv ".\duplicate_reports\&lt;reviewed_video_csv&gt;.csv"</code></pre>
+
+  <p><strong>Result:</strong> confirmed duplicate files are sent to the Recycle Bin by default. For videos, matching <code>video_file.ext.xmp</code> sidecars are also processed by default.</p>
+
+  <h3>Step 13 — Run the corrective metadata/tag/sidecar pass last</h3>
+  <p>Run the corrective script after the archive is organized and de-duplicated. This is the final pass that uses filenames and parent folders to repair metadata/tag structure.</p>
+
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ResetExistingTags `
+  -WhatIf
+
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ResetExistingTags</code></pre>
+
+  <p><strong>Why this is last:</strong> the corrective script uses the current parent folder as the tag source. Running it after organization means your tags reflect the final folder structure, not temporary import folders or holding folders.</p>
+
+  <h3>Alternative path — if nothing is organized yet</h3>
+  <p>If your archive starts as one mostly unorganized folder, use the rename script first to create unique filenames. Then use filename dates, previews, and manual review to organize files into meaningful subfolders. After that, run duplicate detection and the final corrective script.</p>
+
+  <div class="warning">
+    <strong>Important for undated files:</strong> if undated files are not manually grouped into a meaningful folder, folder-based inference may be weak or rejected by the safety rules. Do not rely on a giant mixed folder to provide accurate dates.
+  </div>
+
+  <h3>Finished state</h3>
+  <p>When complete, you should have a structured archive with stable filenames, reduced duplicates, corrected image dates/tags where supported, and video sidecars for date/tag metadata.</p>
+</section>
+
+
+<section id="adding-to-existing">
+  <h2>Adding New Files/Folders Later</h2>
+
+  <p>After the archive is already cleaned up, you usually do not need to rerun every step across the entire archive for every new batch. The best approach depends on what you are adding.</p>
+
+  <div class="safe">
+    <strong>General rule:</strong> process the smallest folder that contains the new files, unless you intentionally need duplicate comparison against the entire archive.
+  </div>
+
+  <h3>Scenario A — Adding a new import folder</h3>
+  <p>Use this when you copied new photos/videos into a temporary import folder such as:</p>
+
+  <pre><code>D:\MediaArchive\Photos and Videos\New Import - Phone 2026</code></pre>
+
+  <h4>Recommended steps</h4>
+  <ol>
+    <li>Run the rename script only against the new import folder.</li>
+    <li>Review any missing-date CSV rows.</li>
+    <li>Move the newly renamed files into final album/event folders.</li>
+    <li>Run the corrective script against the folders you changed.</li>
+    <li>Run duplicate detection against the full archive only if you suspect these files duplicate older files elsewhere.</li>
+  </ol>
+
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos\New Import - Phone 2026" `
+  -WhatIf
+
+python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos\New Import - Phone 2026"</code></pre>
+
+  <p><strong>Why not scan the whole archive?</strong> the rename script skips already-renamed files, but targeting the new folder is still faster, cleaner, and easier to audit.</p>
+
+  <h3>Scenario B — Adding files directly into an existing event folder</h3>
+  <p>If you know the files belong in an existing folder, place them there first. Then run rename/CatchUp against that folder only.</p>
+
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos\Beach Trip - 2020" `
+  -CatchUp `
+  -CatchUpMinFolderDates 3 `
+  -CatchUpMaxFolderDateSpanDays 45 `
+  -WhatIf</code></pre>
+
+  <p><strong>Why this works well:</strong> the existing folder already contains related renamed files, so CatchUp has meaningful same-folder date context for any new files missing metadata.</p>
+
+  <h3>Scenario C — Adding a broad unsorted batch</h3>
+  <p>If you add hundreds or thousands of unknown files, treat that batch like a smaller version of the original cleanup:</p>
+
+  <ol>
+    <li>Place them in a new holding folder such as <code>Needs Categorized - Import 2026-06</code>.</li>
+    <li>Run rename against that holding folder.</li>
+    <li>Manually move unresolved files into meaningful folders where possible.</li>
+    <li>Run CatchUp only after that manual grouping.</li>
+    <li>Run duplicate detection against either the import folder or the full archive depending on your goal.</li>
+    <li>Run the corrective script after final placement.</li>
+  </ol>
+
+  <div class="warning">
+    <strong>Do not use CatchUp as a broad-date guesser for a mixed holding folder.</strong> If the import folder contains unrelated years/events, manually group files first or confirm dates through the CSV.
+  </div>
+
+  <h3>Scenario D — Checking duplicates only inside the new batch</h3>
+  <p>If you only care whether the new batch has duplicates within itself, run duplicate detection against the new import folder only.</p>
+
+  <pre><code>python .\Find-SimilarImages-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos\New Import - Phone 2026" `
+  -OutputFolder ".\duplicate_reports" `
+  -Workers 16
+
+python .\Find-SimilarVideos-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos\New Import - Phone 2026" `
+  -OutputFolder ".\duplicate_reports" `
+  -SamplePoints "0.25,0.50,0.75" `
+  -FFmpegTimeoutSeconds 8</code></pre>
+
+  <p><strong>Why choose this:</strong> it is faster and simpler, but it will not detect duplicates against older archive folders.</p>
+
+  <h3>Scenario E — Checking duplicates against the full archive</h3>
+  <p>If the new files may duplicate older files already in the archive, run duplicate detection against the full archive root.</p>
+
+  <pre><code>python .\Find-SimilarImages-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -Workers 16
+
+python .\Find-SimilarVideos-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -SamplePoints "0.25,0.50,0.75" `
+  -FFmpegTimeoutSeconds 8</code></pre>
+
+  <p><strong>Why choose this:</strong> it is slower, but it can find duplicates between the new files and older archive files. The caches help future runs avoid reprocessing unchanged media.</p>
+
+  <h3>Scenario F — After moving or renaming folders</h3>
+  <p>If you reorganize folders after files were already tagged or sidecars were already written, rerun the corrective script against the changed folder or the full archive so parent-folder tags and sidecars match the new structure.</p>
+
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos\Beach Trip - 2020" `
+  -ResetExistingTags `
+  -WhatIf</code></pre>
+
+  <p><strong>Use a specific folder when:</strong> you only changed one event/album folder.</p>
+  <p><strong>Use the full archive root when:</strong> you reorganized many folders or want to normalize everything again.</p>
+
+  <h3>Practical adding-to-existing checklist</h3>
+  <table>
+    <thead><tr><th>Question</th><th>Best next step</th></tr></thead>
+    <tbody>
+      <tr><td>Are the files brand new and isolated in one folder?</td><td>Run rename on that folder only.</td></tr>
+      <tr><td>Do the files belong to an existing event folder?</td><td>Move them there first, then use rename/CatchUp on that folder.</td></tr>
+      <tr><td>Do the files lack dates and are still in a mixed folder?</td><td>Manually group or manually confirm dates in CSV before trusting inference.</td></tr>
+      <tr><td>Do you only need duplicates within the new batch?</td><td>Run duplicate finders on the new batch folder only.</td></tr>
+      <tr><td>Could the new files duplicate older archive files?</td><td>Run duplicate finders against the full archive root.</td></tr>
+      <tr><td>Did folder names or organization change?</td><td>Run the corrective script so tags/sidecars match the new parent folders.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+
+
+<section id="filename-format">
+  <h2>Archive Filename Format</h2>
+  <p>The tools use this final naming format:</p>
+  <pre><code>YYYY-MM-DD_0000000001_IMG.ext
+YYYY-MM-DD_0000000002_VID.ext</code></pre>
+
+  <table>
+    <thead><tr><th>Part</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>YYYY-MM-DD</code></td><td>Date from metadata, confirmed CSV date, CatchUp folder inference, or filename date during corrective actions.</td></tr>
+      <tr><td><code>0000000001</code></td><td>Global sequence number from <code>photo_rename_state.json</code>.</td></tr>
+      <tr><td><code>IMG</code></td><td>Image file.</td></tr>
+      <tr><td><code>VID</code></td><td>Video file.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="post-rename-consolidation">
+  <h2>Post-Rename Consolidation Step</h2>
+  <p>After the rename step and before duplicate detection, combine directories where it makes sense so the duplicate finders can compare files across the archive instead of only within isolated folders.</p>
+  <div class="info"><strong>Goal:</strong> de-dupe works best when duplicate candidates are all visible under the same scan root.</div>
+</section>
+
+<section id="catchup">
+  <h2>CatchUp Rename Mode</h2>
+  <p><code>-CatchUp</code> is for end-stage cleanup where most of the archive is renamed and organized, but some supported image/video files are still unrenamed and may not have usable Date Taken metadata.</p>
+  <h3>CatchUp safety rules</h3>
+  <table>
+    <thead><tr><th>Rule</th><th>Default</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Same-folder context only</td><td>Yes</td><td>Prevents guessing from unrelated albums.</td></tr>
+      <tr><td>Minimum already-renamed dated files</td><td><code>3</code></td><td>Requires enough folder evidence before auto-inference.</td></tr>
+      <tr><td>Maximum same-folder date span</td><td><code>45</code> days</td><td>Prevents broad mixed-year folders.</td></tr>
+      <tr><td>Fallback date</td><td>Median date at 12:00 PM</td><td>Median resists outliers.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="rename">
+  <h2>Rename-PhotosVideos-ExifTool.py</h2>
+  <h3>Current Behavior</h3>
+  <ul>
+    <li>Renames images as <code>_IMG</code> and videos as <code>_VID</code>.</li>
+    <li>Uses ExifTool metadata dates for normal renaming.</li>
+    <li>Writes missing-date rows to CSV for manual review.</li>
+    <li>Processes confirmed CSV rows with <code>DateToUse</code>.</li>
+    <li>Can set confirmed dates back into supported file metadata with <code>-SetMetadataDatesOnConfirm</code>.</li>
+    <li>Can set filesystem dates with <code>-SetFileSystemDates</code>.</li>
+    <li>Skips already-renamed files by default during normal scans.</li>
+    <li>Handles MPG/MPEG by renaming them but skipping embedded metadata writes.</li>
+  </ul>
+  <h3>Syntax</h3>
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py [-Root &lt;folder&gt;] [-ExifTool &lt;path&gt;] [-WhatIf]
+python .\Rename-PhotosVideos-ExifTool.py -ReviewCsv &lt;csv&gt; [-WhatIf] [-SetMetadataDatesOnConfirm] [-SetFileSystemDates]
+python .\Rename-PhotosVideos-ExifTool.py -Root &lt;folder&gt; -CatchUp [-WhatIf]</code></pre>
+</section>
+
+<section id="find-images">
+  <h2>Find-SimilarImages-ReviewDelete.py</h2>
+  <p>This script finds visually similar image duplicates and later processes a reviewed CSV.</p>
+  <ul>
+    <li>Analysis mode is read-only.</li>
+    <li>Uses exact SHA-256 plus visual perceptual hashes.</li>
+    <li>Uses SQLite cache so reruns only hash new/changed files.</li>
+    <li>Processing deletes only rows with <code>SuggestedAction=DELETE</code> and <code>ConfirmDelete=CONFIRM</code>.</li>
+    <li>Uses Recycle Bin by default, not permanent delete.</li>
+  </ul>
+  <pre><code>python .\Find-SimilarImages-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -Workers 16</code></pre>
+</section>
+
+<section id="find-videos">
+  <h2>Find-SimilarVideos-ReviewDelete.py</h2>
+  <p>This script finds visually similar video duplicates. It is designed for videos that may have different compression, different file sizes, or different resolution but similar visible content.</p>
+  <ul>
+    <li>Analysis mode is read-only.</li>
+    <li>Uses FFprobe to read video duration, dimensions, and file details.</li>
+    <li>Uses FFmpeg to sample still frames at selected points in the video.</li>
+    <li>Skips bad/slow frame samples instead of failing the whole run.</li>
+    <li>Uses the local <code>.\ffmpeg\bin</code> install automatically when available.</li>
+    <li>Future review/inventory CSVs include <code>EstimatedBitrateKbps</code>.</li>
+    <li>Processing deletes only rows with <code>SuggestedAction=DELETE</code> and <code>ConfirmDelete=CONFIRM</code>.</li>
+    <li>Video process mode sends confirmed videos and matching <code>video_file.ext.xmp</code> sidecars to the Recycle Bin by default.</li>
+  </ul>
+  <pre><code>python .\Find-SimilarVideos-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -SamplePoints "0.25,0.50,0.75" `
+  -FFmpegTimeoutSeconds 8</code></pre>
+</section>
+
+<section id="review-files">
+  <h2>Review-SimilarFiles.py</h2>
+  <p>This is the browser-based central review tool for both image and video duplicate groups. It does not delete, move, or rename files. It only updates the review CSV state and saves a reviewed CSV.</p>
+  <h3>Current Features</h3>
+  <ul>
+    <li>Opens image review CSVs and video review CSVs.</li>
+    <li>Multiple KEEP rows per group are allowed.</li>
+    <li>Text filter searches every filename/path in the group.</li>
+    <li>Video preview uses the browser where the video container/codec is supported.</li>
+    <li>Open file and Open folder buttons are available for files the browser cannot preview.</li>
+    <li>Suppresses harmless browser-aborted video stream traceback noise.</li>
+    <li>Confirm All Remaining Groups confirms all DELETE rows currently shown by filters.</li>
+  </ul>
+  <h3>PowerShell path quoting</h3>
+  <pre><code>python .\Review-SimilarFiles.py `
+  -Csv "C:\MediaArchiveTools\duplicate_reports\&lt;review_csv&gt;.csv"</code></pre>
+  <div class="warning">PowerShell treats <code>&amp;</code> as a special character. Any path containing <code>MediaArchiveTools</code> must be wrapped in quotes.</div>
+  <h3>Reviewer-side video keeper preference</h3>
+  <div class="override">
+    <strong>Current video keeper preference:</strong>
+    <ol>
+      <li>If all files in the group are in the same directory and have the same non-zero file size, keep the file with the older Date Modified.</li>
+      <li>Otherwise prefer an archive-renamed video filename.</li>
+      <li>Then prefer a file with a sidecar.</li>
+      <li>Then prefer higher estimated bitrate / larger effective file size.</li>
+      <li>Then prefer higher resolution.</li>
+      <li>Then shorter path / alphabetical path.</li>
+    </ol>
+  </div>
+</section>
+
+<section id="duplicate-keeper-logic">
+  <h2>How KEEP / DELETE Suggestions Are Determined</h2>
+
+  <p>The duplicate finders and reviewer make suggestions only. They do not decide final deletion by themselves. The final delete processors only act on rows where:</p>
+
+  <pre><code>SuggestedAction = DELETE
+ConfirmDelete = CONFIRM</code></pre>
+
+  <div class="safe">
+    <strong>Safety rule:</strong> a file marked <code>DELETE</code> is not deleted until it is also confirmed. The review UI can change the suggested keeper, allow multiple keepers, or clear confirmations before saving the reviewed CSV.
+  </div>
+
+  <h3>Image duplicate grouping logic</h3>
+  <p>The image finder groups images using a combination of exact file hashing and visual hashing:</p>
+
+  <ul>
+    <li><strong>Exact SHA-256 duplicate:</strong> files with the same exact file hash are grouped as exact duplicates.</li>
+    <li><strong>Visual similarity:</strong> files can also be grouped when perceptual hashes, aspect ratio, and average color are close enough.</li>
+    <li><strong>Match confidence:</strong> groups are labeled <code>Very High</code>, <code>High</code>, or <code>Review Carefully</code> based on visual hash distance to the keeper.</li>
+  </ul>
+
+  <h3>Image suggested keeper preference</h3>
+  <p>For image groups, the initial finder suggestion prefers the file that is most likely to be the best preservation copy:</p>
+
+  <ol>
+    <li>Higher pixel count / resolution.</li>
+    <li>Larger file size.</li>
+    <li>Preferred extension order, such as HEIC/HEIF before JPG/JPEG, then PNG/TIF/TIFF/WebP.</li>
+    <li>Shorter path.</li>
+    <li>Alphabetical path tie-breaker.</li>
+  </ol>
+
+  <p>Every other file in the image group is initially suggested as <code>DELETE</code>, but still requires review and confirmation.</p>
+
+  <h3>Video duplicate grouping logic</h3>
+  <p>The video finder uses FFprobe and FFmpeg instead of relying only on filenames or file size:</p>
+
+  <ul>
+    <li>FFprobe reads duration, width, height, and file details.</li>
+    <li>FFmpeg samples still frames at configured points in the video, such as 25%, 50%, and 75%.</li>
+    <li>The sampled frames are hashed and compared.</li>
+    <li>Duration difference and sampled-frame similarity drive the duplicate match.</li>
+    <li>Date Modified closeness is only a weak supporting signal, not the deciding factor.</li>
+  </ul>
+
+  <h3>Video suggested keeper preference</h3>
+  <p>The current video preference is designed for compressed/re-exported videos where resolution alone can be misleading.</p>
+
+  <ol>
+    <li>If all files in the group are in the same directory and have the same non-zero file size, prefer the older Date Modified file.</li>
+    <li>Otherwise prefer an already archive-renamed video filename.</li>
+    <li>Prefer a file that already has a matching XMP sidecar.</li>
+    <li>Prefer higher estimated bitrate / larger effective file size.</li>
+    <li>Prefer higher resolution.</li>
+    <li>Use shorter path and alphabetical path as final tie-breakers.</li>
+  </ol>
+
+  <div class="info">
+    <strong>Why bitrate/file size outranks resolution for videos:</strong> a very small 1080p video may be heavily compressed and lower quality than a larger 1440x1080 or 720p version. For videos, estimated bitrate and file size are often better preservation signals than resolution alone.
+  </div>
+
+  <h3>Reviewer-side overrides</h3>
+  <p><code>Review-SimilarFiles.py</code> may adjust the initial finder suggestions when it opens a CSV. This avoids rerunning expensive video analysis just to change keeper preference.</p>
+
+  <table>
+    <thead><tr><th>Override</th><th>What it does</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>Needs Categorized override</td><td>If the current keeper is inside <code>Needs Categorized</code> and a duplicate outside that folder is the same size or larger, the reviewer suggests the outside copy as keeper.</td><td>Helps move away from temporary staging folders.</td></tr>
+      <tr><td>Video bitrate/file-size override</td><td>For video groups, the reviewer can prefer the higher estimated bitrate/larger file over a smaller higher-resolution file.</td><td>A tiny high-resolution video may be over-compressed.</td></tr>
+      <tr><td>Same folder + same size + older modified override</td><td>If video files are in the same directory and the file size is the same, the reviewer suggests the older Date Modified file.</td><td>When quality indicators are equal, the older timestamp may better preserve original file history.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warning">
+    <strong>Manual review still matters:</strong> these are preservation-oriented suggestions, not guarantees. Always review before confirming deletes.
+  </div>
+</section>
+
+
+<section id="windows-tags">
+  <h2>Windows Explorer Tags / System.Keywords</h2>
+
+  <p>Image metadata tags and video sidecar tags are not the same thing as the editable <strong>Tags</strong> field shown in Windows Explorer file properties. Windows Explorer uses the Windows Property System property called <code>System.Keywords</code>.</p>
+
+  <div class="info">
+    <strong>Current behavior:</strong> ExifTool is still used for image metadata and the corrective script still creates/updates video XMP sidecars. The optional <code>-SetWindowsTags</code> switch adds Windows Explorer tag writing for videos through the Windows Property System.
+  </div>
+
+  <h3>Requirement</h3>
+  <p>Windows tag writing requires <code>pywin32</code>:</p>
+
+  <pre><code>python -m pip install pywin32</code></pre>
+
+  <h3>When to use it</h3>
+  <p>Use <code>-SetWindowsTags</code> when you want the actual Windows Explorer <strong>Tags</strong> field on video files to match the parent folder name, in addition to having the XMP sidecar.</p>
+
+  <h3>Video-only Windows tag preview</h3>
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -VideosOnly `
+  -SetWindowsTags `
+  -NoVideoSidecars `
+  -WhatIf</code></pre>
+
+  <h3>Video-only Windows tag live run</h3>
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -VideosOnly `
+  -SetWindowsTags `
+  -NoVideoSidecars</code></pre>
+
+  <h3>Reset video sidecars and Windows tags together</h3>
+  <p>If you want to rewrite existing video sidecars and also reset Windows Explorer tags to the current parent folder:</p>
+
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -VideosOnly `
+  -ResetExistingTags `
+  -SetWindowsTags `
+  -WhatIf</code></pre>
+
+  <h3>Replace vs append behavior</h3>
+  <table>
+    <thead><tr><th>Switches</th><th>Behavior</th></tr></thead>
+    <tbody>
+      <tr><td><code>-SetWindowsTags</code></td><td>Replaces the Windows Explorer Tags field with the current parent-folder tag.</td></tr>
+      <tr><td><code>-SetWindowsTags -AppendWindowsTags</code></td><td>Adds the parent-folder tag while keeping existing Windows tags.</td></tr>
+      <tr><td><code>-ResetExistingTags -SetWindowsTags</code></td><td>Resets video sidecars and resets Windows tags to the current parent folder. If the folder is <code>Needs Categorized</code>, Windows tags are cleared instead of setting that staging-folder name.</td></tr>
+      <tr><td><code>-VideosOnly</code></td><td>Targets only renamed video files. ExifTool is not required in video-only mode.</td></tr>
+      <tr><td><code>-ImagesOnly</code></td><td>Targets only renamed image files.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warning">
+    <strong>File type support caveat:</strong> Windows tag writing depends on the Windows property handler for the file type. If Windows Explorer can manually write Tags for that video type, the script usually can too. Some video containers/codecs may still reject writes.
+  </div>
+</section>
+
+<section id="corrective">
+  <h2>Correct-ImageVideoMetadataFromFilename.py</h2>
+  <p>This is the final corrective pass after renaming and duplicate cleanup. It scans renamed images and videos. Images get missing Date Taken and parent-folder tags written where supported. Videos get XMP sidecar files using the filename date and parent-folder tag.</p>
+  <ul>
+    <li>Processes renamed image files matching <code>YYYY-MM-DD_##########_IMG.ext</code>.</li>
+    <li>Processes renamed video files matching <code>YYYY-MM-DD_##########_VID.ext</code>.</li>
+    <li>Sets missing Date Taken / DateTimeOriginal from the filename date.</li>
+    <li>Adds the immediate parent folder name as a tag/keyword for images and sidecar tag for videos.</li>
+    <li>Does not add the parent-folder tag if the immediate parent folder is <code>Needs Catagorized</code>, <code>Needs Categorized</code>, <code>Needs Catagory</code>, or <code>Needs Category</code>.</li>
+    <li>Creates video sidecars using <code>video_file.ext.xmp</code> naming.</li>
+    <li><code>-ResetExistingTags</code> clears stale image tag fields and rewrites existing video sidecars.</li>
+  </ul>
+  <h3>Syntax</h3>
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py -Root &lt;folder&gt; [-WhatIf]
+                                                [-OutputFolder &lt;folder&gt;]
+                                                [-ReportCsv &lt;csv&gt;]
+                                                [-Limit &lt;number&gt;]
+                                                [-OverwriteExistingDateTaken]
+                                                [-NoDateTaken]
+                                                [-NoParentTag]
+                                                [-ResetExistingTags]
+                                                [-SetWindowsTags]
+                                                [-AppendWindowsTags]
+                                                [-ImagesOnly]
+                                                [-VideosOnly]
+                                                [-NoVideoSidecars]
+                                                [-UpdateExistingSidecars]
+                                                [-KeepExifToolBackups]</code></pre>
+  <h3>Reset existing tags and sidecars</h3>
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ResetExistingTags `
+  -WhatIf
+
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ResetExistingTags</code></pre>
+  <div class="safe"><strong>ResetTags vs UpdateExistingSidecars:</strong> <code>-ResetExistingTags</code> already rewrites existing video sidecars. Use <code>-UpdateExistingSidecars</code> separately only when you want to update existing sidecars without doing the broader stale image-tag reset.</div>
+</section>
+
+<section id="workflows">
+  <h2>Current Recommended Workflows</h2>
+
+  <h3>Workflow A: Rename Media</h3>
+  <pre><code>Set-Location "C:\MediaArchiveTools"
+
+python .\Rename-PhotosVideos-ExifTool.py -Root "D:\MediaArchive\Photos and Videos" -WhatIf
+python .\Rename-PhotosVideos-ExifTool.py -Root "D:\MediaArchive\Photos and Videos"</code></pre>
+
+  <h3>Workflow B: Process Missing-Date CSV</h3>
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -ReviewCsv ".\photo_rename_missing_dates.csv" `
+  -SetMetadataDatesOnConfirm `
+  -WhatIf
+
+python .\Rename-PhotosVideos-ExifTool.py `
+  -ReviewCsv ".\photo_rename_missing_dates.csv" `
+  -SetMetadataDatesOnConfirm</code></pre>
+
+  <h3>Workflow C: CatchUp Rename Leftovers</h3>
+  <pre><code>python .\Rename-PhotosVideos-ExifTool.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -CatchUp `
+  -CatchUpMinFolderDates 3 `
+  -CatchUpMaxFolderDateSpanDays 45 `
+  -CatchUpReviewCsv ".\photo_rename_catchup_missing_dates.csv" `
+  -WriteMissingCsvInWhatIf `
+  -WhatIf</code></pre>
+
+  <h3>Workflow D: Image Duplicates</h3>
+  <pre><code>python .\Find-SimilarImages-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -Workers 16
+
+python .\Review-SimilarFiles.py `
+  -Csv ".\duplicate_reports\&lt;timestamp&gt;_similar_images_review.csv"
+
+python .\Find-SimilarImages-ReviewDelete.py `
+  -Process `
+  -Csv ".\duplicate_reports\&lt;reviewed_image_csv&gt;.csv" `
+  -WhatIf</code></pre>
+
+  <h3>Workflow E: Video Duplicates</h3>
+  <pre><code>.\ffmpeg\bin\ffmpeg.exe -version
+.\ffmpeg\bin\ffprobe.exe -version
+
+python .\Find-SimilarVideos-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -OutputFolder ".\duplicate_reports" `
+  -SamplePoints "0.25,0.50,0.75" `
+  -FFmpegTimeoutSeconds 8
+
+python .\Review-SimilarFiles.py `
+  -Csv ".\duplicate_reports\&lt;timestamp&gt;_similar_videos_review.csv"
+
+python .\Find-SimilarVideos-ReviewDelete.py `
+  -Process `
+  -Csv ".\duplicate_reports\&lt;reviewed_video_csv&gt;.csv" `
+  -WhatIf</code></pre>
+
+  <h3>Workflow F: Final Corrective Image Metadata / Video Sidecar Pass</h3>
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ResetExistingTags `
+  -WhatIf
+
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ResetExistingTags</code></pre>
+</section>
+
+
+
+
+<section id="csv-rules">
+  <h2>CSV Rules</h2>
+  <h3>Rename Missing-Date CSV</h3>
+  <table>
+    <thead><tr><th>Column</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td><code>Decision</code></td><td>Set to <code>CONFIRM</code> to use <code>DateToUse</code>. Use <code>DENY</code> to skip.</td></tr>
+      <tr><td><code>DateToUse</code></td><td>Can be <code>YYYY-MM-DD</code>, <code>M/D/YYYY</code>, <code>MM/DD/YYYY</code>, or similar supported date formats.</td></tr>
+      <tr><td><code>FullPath</code></td><td>Original file path to process.</td></tr>
+    </tbody>
+  </table>
+  <h3>Duplicate Review CSV</h3>
+  <table>
+    <thead><tr><th>Column</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td><code>SuggestedAction</code></td><td><code>KEEP</code> or <code>DELETE</code>. Multiple KEEP rows per group are allowed.</td></tr>
+      <tr><td><code>ConfirmDelete</code></td><td>Only rows with <code>CONFIRM</code> are processed by the delete processor.</td></tr>
+      <tr><td><code>GroupId</code></td><td>Duplicate group. Review decisions are group-based.</td></tr>
+      <tr><td><code>FullPath</code></td><td>Actual file path used by the processor.</td></tr>
+    </tbody>
+  </table>
+  <h3>Video Review CSV Fields</h3>
+  <table>
+    <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>DurationSeconds</code></td><td>Actual length of the video.</td></tr>
+      <tr><td><code>DurationDeltaSeconds</code></td><td>Difference in length compared to the current keeper/baseline. Blank on the keeper row.</td></tr>
+      <tr><td><code>DateModifiedDeltaDays</code></td><td>Difference between Windows Date Modified timestamps compared to the keeper/baseline. This is not simply the file age.</td></tr>
+      <tr><td><code>DateModifiedClose</code></td><td>Whether the Date Modified delta is within the configured tolerance.</td></tr>
+      <tr><td><code>EstimatedBitrateKbps</code></td><td>Approximate file-size-per-duration preservation signal. Higher often means less compression, but manual review still matters.</td></tr>
+      <tr><td><code>HasSidecar</code> / <code>SidecarPath</code></td><td>Whether a matching <code>video_file.ext.xmp</code> sidecar exists.</td></tr>
+    </tbody>
+  </table>
+  <div class="warning"><strong>Delete rule:</strong> files are only deleted when <code>SuggestedAction=DELETE</code> and <code>ConfirmDelete=CONFIRM</code>. KEEP rows are not deleted.</div>
+</section>
+
+<section id="mpg">
+  <h2>MPG/MPEG and Video Metadata Direction</h2>
+  <p>MPG/MPEG files are legacy video containers. ExifTool can read useful data from many of them, but it cannot write embedded metadata to MPG/MPEG files.</p>
+  <table>
+    <thead><tr><th>Goal</th><th>Recommended Direction</th></tr></thead>
+    <tbody>
+      <tr><td>Rename MPG/MPEG</td><td>Yes. Rename from metadata or confirmed CSV date.</td></tr>
+      <tr><td>Embed Date Taken directly into MPG/MPEG</td><td>No. Skip embedded metadata write.</td></tr>
+      <tr><td>Set Windows filesystem dates</td><td>Optional helper, using <code>-SetFileSystemDates</code> in rename review processing.</td></tr>
+      <tr><td>Immich-style date/tags for MPG/MPEG</td><td>Use the corrective script to create XMP sidecar files beside the videos.</td></tr>
+      <tr><td>Remux MPG to MP4/MKV just for metadata</td><td>Not recommended as the default. Sidecars are safer and preserve the original file.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="troubleshooting">
+  <h2>Troubleshooting</h2>
+
+  <h3>PowerShell says ampersand is not allowed</h3>
+  <p>Quote any path containing <code>&amp;</code>, such as <code>"C:\MediaArchiveTools\..."</code>.</p>
+
+  <h3><code>.\ffmpeg</code> is not recognized</h3>
+  <p><code>ffmpeg</code> is a folder. Use <code>.\ffmpeg\bin\ffmpeg.exe -version</code>.</p>
+
+  <h3>Video reviewer shows browser stream disconnect messages</h3>
+  <p>Use the current <code>Review-SimilarFiles.py</code>. Harmless browser-aborted video stream tracebacks are suppressed.</p>
+
+  <h3>Video preview does not play</h3>
+  <p>The browser may not support that video container/codec. Use <strong>Open file</strong> from the reviewer card.</p>
+
+  <h3>Rename script says MPG metadata write is unsupported</h3>
+  <p>That is expected. MPG/MPEG files can be renamed, but embedded metadata writing is skipped. Use filesystem dates and XMP sidecars for those files.</p>
+
+  <h3>CatchUp found files still needing review</h3>
+  <p>Open <code>photo_rename_catchup_missing_dates.csv</code>, set <code>Decision=CONFIRM</code>, enter <code>DateToUse</code>, then process it with <code>-ReviewCsv</code>.</p>
+
+  <h3>Need to bulk-confirm duplicate groups</h3>
+  <p>Use <strong>Confirm All Remaining Groups</strong>. It applies only to currently shown groups, so use the strength/text filters to control scope.</p>
+
+  <h3>Need video tags/date for Immich</h3>
+  <p>Run <code>Correct-ImageVideoMetadataFromFilename.py</code>. It creates <code>video_file.ext.xmp</code> sidecars for renamed video files using the filename date and parent-folder tag rule.</p>
+</section>
+
+<section>
+  <h2>Final Notes</h2>
+  <ul>
+    <li>Always use <code>-WhatIf</code> before live rename, delete, or metadata actions.</li>
+    <li>The duplicate review UI never deletes files. It only saves CSV decisions.</li>
+    <li>The duplicate processors delete only confirmed DELETE rows and should use Recycle Bin by default.</li>
+    <li>After renaming, consolidate/combine directories where possible before running de-dupe.</li>
+    <li>Use <code>-CatchUp</code> after organization to rename leftover unrenamed files without ExifTool-scanning the whole completed archive again.</li>
+    <li>Use the central <code>Review-SimilarFiles.py</code> for both image and video review CSVs.</li>
+    <li>The final corrective metadata/tag/sidecar pass should be run after duplicate cleanup.</li>
+    <li>Keep backups before large archive-wide actions.</li>
+  </ul>
+  <p class="muted">Public/generic path version with fixed contents order and restored Adding New Files/Folders Later section. Generated: 2026-06-27 20:03:48</p>
+</section>
+
+</main>
+</body>
+</html>
