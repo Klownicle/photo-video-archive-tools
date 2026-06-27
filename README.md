@@ -1,78 +1,88 @@
 # Photo & Video Archive Tools
 
-Windows-focused Python/PowerShell utilities for cleaning up large photo and video archives.
+Windows-focused Python/PowerShell tools for cleaning up a large photo/video archive.
 
-This project was created for a practical one-time archive cleanup and is shared publicly because it may be useful as a starting point for someone else.
+I made this because I had about 40k photos/videos to work through and did not find a public tool that felt modern enough for what I needed. I found older options like ImageHash-based scripts and VisiPics, but they were not the right fit for my archive. Basic ImageHash settings also missed a lot of what I needed to catch.
+
+So I vibe-coded this with generative AI help and used it for my own cleanup.
+
+Free to use. Fork it. Change it. Break it. Fix it with AI. I do not plan to support it.
+
+Also, use this at your own choice and risk. I take no responsibility if it deletes the wrong file, corrupts metadata, breaks your workflow, or somehow sets your PC on fire.
 
 ![Video duplicate review example](assets/video-review-example.png)
 
-## Maintenance status
+## Help guide
 
-This repository is shared **as-is**.
+[Open the help guide](https://klownicle.github.io/photo-video-archive-tools/)
 
-I do not plan to actively maintain this project, provide support, or fix issues reported by others. The tools were built for a specific cleanup workflow and may need changes for your archive, codecs, folder structure, or tooling versions.
+GitHub shows HTML files as source code when opened from the normal repo file browser. The link above is the rendered GitHub Pages version.
 
-Recommended use:
+Source files:
 
-1. Fork the repository.
-2. Test on a small copy of your files.
-3. Adapt the scripts for your own archive.
-4. Use your own debugging and tools, including generative AI, to modify it.
+- [`docs/index.html`](docs/index.html)
+- [`docs/Photo_Video_Archive_Tools_Help.html`](docs/Photo_Video_Archive_Tools_Help.html)
 
-Issues and pull requests may not be reviewed.
+## What this does
 
-## Included tools
+The tools are meant to help with:
 
-- Rename tool: `Rename-PhotosVideos-ExifTool.py`
-- Corrective metadata/tag/sidecar tool: `Correct-ImageVideoMetadataFromFilename.py`
-- Video duplicate finder/processor: `Find-SimilarVideos-ReviewDelete.py`
-- Image duplicate finder/processor: `Find-SimilarImages-ReviewDelete.py`
-- Local browser review UI: `Review-SimilarFiles.py`
-- FFmpeg local installer: `Install-FFmpeg-ForArchiveTool.ps1`
-- Full help guide: `docs/Photo_Video_Archive_Tools_Help.html`
+- renaming photos/videos into stable archive-safe filenames
+- reviewing files with missing dates
+- using folder context to deal with leftover undated files
+- finding image/video duplicates and near-duplicates
+- visually reviewing duplicate groups before deleting anything
+- processing only explicitly confirmed delete rows
+- creating/updating video XMP sidecars
+- correcting image metadata and folder-based tags
+- optionally writing Windows Explorer video tags where supported
 
-## What makes the de-dupe workflow different
+This was built around a real cleanup workflow, not as a general-purpose commercial app.
 
-The de-dupe process is the main reason this project exists. The goal was not just to find exact byte-for-byte duplicates. I needed something that could help review real-world duplicates created by phone exports, cloud downloads, resized images, recompressed videos, edited copies, repeated camera filenames, and files moved through multiple folder structures.
+## The de-dupe part
 
-The de-dupe workflow is intentionally split into three parts:
+The de-dupe workflow is the main reason this project exists.
 
-1. **Find candidate duplicate groups.**
-2. **Review the groups visually in a local browser UI.**
-3. **Process only rows that were explicitly confirmed for deletion.**
+I was not just trying to find exact duplicate files. Exact hash matching is easy, but it misses a lot of real archive junk. My archive had renamed files, resized images, recompressed videos, cloud exports, phone exports, old camera folders, repeated filenames, and random copies spread across folders.
 
-That separation is important. The finder scripts make suggestions, but the delete processors only act when a row has both:
+The workflow is intentionally split into three steps:
+
+1. Find likely duplicate groups.
+2. Review them visually in a local browser UI.
+3. Delete only rows that were explicitly confirmed.
+
+The delete processors only act on rows where both values are set:
 
 ```text
 SuggestedAction = DELETE
 ConfirmDelete = CONFIRM
 ```
 
-The reviewer is the safety layer. It lets you inspect the candidates, change the keeper, keep multiple files from the same group, clear confirmations, and save a reviewed CSV before anything is deleted.
+So the scripts can suggest deletes, but they do not blindly delete them. You review, confirm, save the CSV, then process the confirmed rows.
 
-### Image de-dupe logic
+## Image duplicate logic
 
-The image de-dupe script compares image content instead of only comparing filenames, folders, timestamps, or exact file hashes.
+The image duplicate finder compares image content, not just filenames or exact file hashes.
 
-It is designed to catch cases such as:
+It can help catch things like:
 
 - the same image renamed into different folders
 - resized copies
 - recompressed copies
-- images exported from phones or cloud services
-- visually identical or near-identical copies with different file sizes
+- phone/cloud export duplicates
+- visually identical or near-identical files with different sizes
 
 The image workflow uses:
 
-- **Exact SHA-256** for true byte-for-byte duplicates.
-- **Perceptual dHash** to compare visual structure.
-- **Average hash / aHash** as a second visual similarity signal.
-- **Aspect-ratio comparison** to reduce false matches.
-- **Average color distance** to reduce matches that have similar structure but different visual content.
-- **BK-tree indexing** so hash-distance searches are much faster than comparing every image to every other image.
-- **SQLite caching** so future runs do not need to re-hash unchanged images.
+- SHA-256 for exact byte-for-byte duplicates
+- perceptual dHash for visual similarity
+- average hash / aHash as another visual signal
+- aspect-ratio checks
+- average color distance checks
+- BK-tree indexing so searches are not just a giant slow compare-everything-to-everything loop
+- SQLite caching so future runs do not re-hash unchanged images
 
-The script then groups related matches together and suggests a keeper. The image keeper preference generally favors:
+The suggested image keeper generally favors:
 
 1. higher resolution / pixel count
 2. larger file size
@@ -80,69 +90,54 @@ The script then groups related matches together and suggests a keeper. The image
 4. shorter path
 5. alphabetical path as a final tie-breaker
 
-The confidence labels are intentionally conservative:
+It still needs review. That is the point of the browser reviewer.
 
-- **Very High** means the visual hash distances are very close.
-- **High** means likely duplicate, but still review.
-- **Review Carefully** means the group needs human judgment.
+## Video duplicate logic
 
-### Video de-dupe logic
+Video de-dupe is harder than image de-dupe.
 
-Video de-dupe is harder than image de-dupe because the same video may have different file sizes, codecs, bitrates, containers, resolutions, and modified dates.
+The same video can have a different file size, codec, bitrate, container, resolution, and modified date. A basic file hash is useless for that.
 
-The video finder does not rely on filenames or file hashes alone. It uses FFprobe and FFmpeg to compare the actual video content.
+The video finder uses FFprobe and FFmpeg to compare the actual video content:
 
-The video workflow uses:
+- FFprobe reads duration, width, height, and stream info
+- FFmpeg samples frames from multiple points in the video
+- each sampled frame gets a 64-bit perceptual hash
+- frame hash distances are compared
+- duration has to be close enough
+- Date Modified is used only as a weak audit/helper signal
+- estimated bitrate is used as a quality/preservation signal
+- SQLite caching avoids re-sampling unchanged videos every run
 
-- **FFprobe** to read duration, width, height, and basic stream information.
-- **FFmpeg** to sample frames from multiple points in the video.
-- **64-bit perceptual frame hashes** to compare sampled frames visually.
-- **Duration tolerance** because two duplicate videos should usually be nearly the same length.
-- **Frame-hash distance thresholds** to score visual similarity.
-- **Date Modified delta** as a weak audit/helper signal, not as the deciding factor.
-- **Estimated bitrate** as a preservation signal.
-- **SQLite caching** so unchanged videos do not need to be re-sampled every run.
+This was useful for videos that were exported, compressed, re-encoded, resized, or renamed but were still basically the same clip.
 
-This makes the video de-dupe useful for cases where:
+## Video keeper logic
 
-- a video was re-encoded
-- a cloud service compressed or exported a different copy
-- one copy has a different resolution
-- one copy has a much smaller or larger file size
-- the modified date is not trustworthy
-- the filename changed but the visible content is the same
+For videos, the keeper is not simply “highest resolution wins.”
 
-### Video keeper logic
+That mattered because a tiny heavily compressed 1080p file can be worse than a larger lower-resolution copy. So the video logic tries to prefer preservation quality, not just dimensions.
 
-For videos, the keeper logic is not simply “highest resolution wins.” That was intentional.
+The current video keeper preference is roughly:
 
-A tiny 1080p video can be worse than a larger 720p or 1440x1080 video if the 1080p copy is heavily compressed. So the video logic favors preservation quality signals before resolution.
-
-The current video keeper preference is:
-
-1. if all files in the group are in the same directory and have the same non-zero file size, prefer the older Date Modified file
-2. otherwise prefer an already archive-renamed video filename
-3. prefer a file that already has a matching XMP sidecar
+1. if everything is in the same folder and the files are the same size, prefer the older Date Modified file
+2. prefer an already archive-renamed video filename
+3. prefer a file with a matching XMP sidecar
 4. prefer higher estimated bitrate / larger effective file size
 5. prefer higher resolution
 6. use shorter path and alphabetical path as final tie-breakers
 
-The reviewer can also apply keeper overrides without rerunning expensive video analysis. For example, if a prior keeper is inside a temporary `Needs Categorized` folder and an equal-or-better duplicate exists outside that folder, the reviewer can suggest the outside file as the keeper instead.
+The reviewer can also override the suggested keeper without rerunning the expensive video analysis. For example, if the suggested keeper is still sitting in a temporary `Needs Categorized` folder, but an equal-or-better copy exists in a real album folder, the reviewer can suggest keeping the better placed file instead.
 
-### Why this was useful for my archive
+## Included files
 
-My archive had tens of thousands of files, repeated camera names, partially sorted folders, a large `Needs Categorized` holding area, missing dates, old videos, sidecars, and many duplicate-looking exports. The value of this workflow was that it gave me a way to:
-
-- normalize filenames first
-- preserve folder context
-- find likely duplicates by content
-- visually review the results
-- avoid one-click blind deletion
-- keep multiple files when needed
-- process only confirmed deletes
-- clean up metadata and sidecars after the structure was stable
-
-That combination is what made this more useful to me than a simple exact duplicate finder or a basic image-hash-only pass.
+- `Rename-PhotosVideos-ExifTool.py`
+- `Correct-ImageVideoMetadataFromFilename.py`
+- `Find-SimilarImages-ReviewDelete.py`
+- `Find-SimilarVideos-ReviewDelete.py`
+- `Review-SimilarFiles.py`
+- `Install-FFmpeg-ForArchiveTool.ps1`
+- `requirements.txt`
+- `docs/Photo_Video_Archive_Tools_Help.html`
 
 ## Requirements
 
@@ -154,15 +149,13 @@ python -m pip install -r requirements.txt
 
 ### ExifTool
 
-ExifTool is required for rename and corrective metadata operations.
+ExifTool is required for rename and metadata operations.
 
-Get ExifTool from the official ExifTool site:
+Get it from the official ExifTool site:
 
 ```text
 https://exiftool.org/
 ```
-
-The official ExifTool site may point Windows downloads to SourceForge. Use the Windows executable package from the official download path.
 
 Recommended Windows placement for these scripts:
 
@@ -170,71 +163,55 @@ Recommended Windows placement for these scripts:
 C:\Tools\ExifTool\exiftool.exe
 ```
 
-Typical manual setup:
+Typical setup:
 
-1. Download the Windows executable package from the official ExifTool site.
+1. Download the Windows executable package from ExifTool.
 2. Extract it.
 3. Rename `exiftool(-k).exe` to `exiftool.exe` if needed.
-4. Place it here:
-
-```text
-C:\Tools\ExifTool\exiftool.exe
-```
-
-5. Verify it from PowerShell:
+4. Place it at `C:\Tools\ExifTool\exiftool.exe`.
+5. Verify it:
 
 ```powershell
 & "C:\Tools\ExifTool\exiftool.exe" -ver
 ```
 
-If you put ExifTool somewhere else, pass it explicitly:
-
-```powershell
-python .\Rename-PhotosVideos-ExifTool.py `
-  -Root "D:\MediaArchive\Photos and Videos" `
-  -ExifTool "C:\Path\To\exiftool.exe" `
-  -WhatIf
-```
+If you put it somewhere else, pass the path with `-ExifTool`.
 
 ### FFmpeg / FFprobe
 
 FFmpeg and FFprobe are required for video duplicate detection.
 
-This repository includes a helper installer:
+This repo includes a helper installer:
 
 ```powershell
 .\Install-FFmpeg-ForArchiveTool.ps1 -Force
 ```
 
-That installer downloads and places FFmpeg locally under the tool folder, usually here:
+That should place FFmpeg locally under the tool folder:
 
 ```text
 .\ffmpeg\bin\ffmpeg.exe
 .\ffmpeg\bin\ffprobe.exe
 ```
 
-The video duplicate finder can auto-detect that local `ffmpeg\bin` folder.
+The video duplicate finder can auto-detect that local folder.
 
-Verify after installation:
+Verify it:
 
 ```powershell
 .\ffmpeg\bin\ffmpeg.exe -version
 .\ffmpeg\bin\ffprobe.exe -version
 ```
 
-### Platform note
-
-Windows is assumed for PowerShell examples, Recycle Bin delete behavior, and optional Windows Explorer tag support.
-
-
 ## Basic workflow
 
 1. Rename media into stable archive-safe names.
 2. Review unresolved missing-date items.
 3. Use CatchUp only after undated files are in meaningful folders.
-4. Find and review image/video duplicates.
-5. Process confirmed deletes with `-WhatIf` first.
-6. Run the corrective metadata/tag/sidecar pass after the folder structure is stable.
+4. Find duplicate images/videos.
+5. Review duplicate groups in `Review-SimilarFiles.py`.
+6. Process confirmed deletes with `-WhatIf` first.
+7. Run the corrective metadata/tag/sidecar pass after the folder structure is stable.
 
 ## Safety rule
 
@@ -247,32 +224,15 @@ ConfirmDelete = CONFIRM
 
 Always run rename, delete, and metadata operations with `-WhatIf` first.
 
-## Viewing the HTML help guide
+Also: do not run this against your only copy of anything important. Test on a copied folder first.
 
-GitHub shows HTML files as source code when you click them in the normal repository file browser. That is expected.
+## Maintenance status
 
-The rendered help guide is available through GitHub Pages:
+This repository is shared as-is.
 
-[Open the rendered help guide](https://klownicle.github.io/photo-video-archive-tools/)
+I do not plan to actively maintain this project, provide support, or fix reported issues. If it helps you, great. If it does not, fork it and change it.
 
-The repository also includes the GitHub Pages landing file:
-
-[`docs/index.html`](docs/index.html)
-
-That landing page redirects to the full help guide:
-
-[`docs/Photo_Video_Archive_Tools_Help.html`](docs/Photo_Video_Archive_Tools_Help.html)
-
-
-## Full guide
-
-[Open the rendered help guide](https://klownicle.github.io/photo-video-archive-tools/)
-
-Source files:
-
-- [`docs/index.html`](docs/index.html)
-- [`docs/Photo_Video_Archive_Tools_Help.html`](docs/Photo_Video_Archive_Tools_Help.html)
-
+Issues and pull requests may not be reviewed.
 
 ## License
 
