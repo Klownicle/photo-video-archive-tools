@@ -271,6 +271,24 @@ YYYY-MM-DD_0000000002_VID.ext</code></pre>
     You do <strong>not</strong> need to also pass <code>-UpdateExistingSidecars</code> when running a reset pass. Use <code>-UpdateExistingSidecars</code> by itself when you only want to rewrite existing video sidecars without doing the broader image tag reset.
   </div>
 
+
+  <h3>When does the corrective script need ExifTool?</h3>
+  <p>The default corrective pass processes both images and videos. Images require ExifTool because the script reads existing image metadata first, then decides whether Date Taken or image tags need to be written. Videos do not need ExifTool for sidecars or Windows Explorer tags.</p>
+
+  <table>
+    <thead><tr><th>Run type</th><th>ExifTool needed?</th><th>What happens</th></tr></thead>
+    <tbody>
+      <tr><td>Default run, no targeting flags</td><td>Yes</td><td>Images are checked with ExifTool; videos get sidecars as needed.</td></tr>
+      <tr><td><code>-VideosOnly</code></td><td>No</td><td>Only videos are scanned/processed. Sidecars and Windows video tags can be handled without ExifTool.</td></tr>
+      <tr><td><code>-SkipExifTool</code></td><td>No</td><td>Images are reported as skipped; video sidecars and Windows video tags can still be processed.</td></tr>
+      <tr><td><code>-ImagesOnly</code></td><td>Yes</td><td>Image Date Taken and embedded image tags require ExifTool.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="info">
+    <strong>Good video-only one-and-done pass:</strong> use <code>-SkipExifTool -SetWindowsTags -AppendWindowsTags -UpdateExistingSidecars</code> when you only want video Windows tags and video sidecars updated from the filename/folder structure without waiting for an image ExifTool scan.
+  </div>
+
   <h3>Verify your corrective script has the reset-capable options</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py -h | findstr /I "ResetExistingTags UpdateExistingSidecars"</code></pre>
 
@@ -290,7 +308,7 @@ YYYY-MM-DD_0000000002_VID.ext</code></pre>
       <tr><td><code>Find-SimilarImages-ReviewDelete.py</code></td><td>Finds visually similar image duplicates and later processes confirmed image delete rows from a reviewed CSV.</td><td>Analysis is read-only. Process mode should be run with <code>-WhatIf</code> first.</td></tr>
       <tr><td><code>Find-SimilarVideos-ReviewDelete.py</code></td><td>Finds visually similar video duplicates using FFprobe metadata and FFmpeg frame sampling. Later processes confirmed video delete rows and sidecar deletes.</td><td>Analysis is read-only. Process mode should be run with <code>-WhatIf</code> first.</td></tr>
       <tr><td><code>Review-SimilarFiles.py</code></td><td>Central local browser UI for reviewing image and video duplicate groups. Supports multiple keepers, filters, video previews where browser-supported, override suggestions, and bulk confirmation.</td><td>Yes. It does not delete files.</td></tr>
-      <tr><td><code>Correct-ImageVideoMetadataFromFilename.py</code></td><td>Final corrective pass for renamed images/videos. Images get Date Taken and folder tags where supported. Videos get <code>video_file.ext.xmp</code> sidecars. <code>-ResetExistingTags</code> resets stale image tags and rewrites existing sidecars.</td><td>Run with <code>-WhatIf</code> first.</td></tr>
+      <tr><td><code>Correct-ImageVideoMetadataFromFilename.py</code></td><td>Final corrective pass for renamed images/videos. Images get Date Taken and folder tags where supported. Videos get <code>video_file.ext.xmp</code> sidecars. <code>-ResetExistingTags</code> resets stale image tags and rewrites existing sidecars. <code>-SkipExifTool</code> allows video sidecar/Windows-tag passes without image ExifTool reads.</td><td>Run with <code>-WhatIf</code> first.</td></tr>
     </tbody>
   </table>
 
@@ -1083,6 +1101,7 @@ ConfirmDelete = CONFIRM</code></pre>
 <section id="corrective">
   <h2>Correct-ImageVideoMetadataFromFilename.py</h2>
   <p>This is the final corrective pass after renaming and duplicate cleanup. It scans renamed images and videos. Images get missing Date Taken and parent-folder tags written where supported. Videos get XMP sidecar files using the filename date and parent-folder tag.</p>
+  <p>Default behavior is the full corrective pass: scan renamed images/videos, use ExifTool to check images, write missing image Date Taken/tags where needed, and create missing video sidecars. Targeting flags such as <code>-VideosOnly</code>, <code>-ImagesOnly</code>, <code>-SetWindowsTags</code>, <code>-UpdateExistingSidecars</code>, and <code>-SkipExifTool</code> are for narrower one-off or maintenance passes.</p>
   <ul>
     <li>Processes renamed image files matching <code>YYYY-MM-DD_##########_IMG.ext</code>.</li>
     <li>Processes renamed video files matching <code>YYYY-MM-DD_##########_VID.ext</code>.</li>
@@ -1091,6 +1110,7 @@ ConfirmDelete = CONFIRM</code></pre>
     <li>Does not add the parent-folder tag if the immediate parent folder is <code>Needs Catagorized</code>, <code>Needs Categorized</code>, <code>Needs Catagory</code>, or <code>Needs Category</code>.</li>
     <li>Creates video sidecars using <code>video_file.ext.xmp</code> naming.</li>
     <li><code>-ResetExistingTags</code> clears stale image tag fields and rewrites existing video sidecars.</li>
+    <li><code>-SkipExifTool</code> skips ExifTool and skips image processing; video sidecars and Windows video tags can still be processed.</li>
   </ul>
   <h3>Syntax</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py -Root &lt;folder&gt; [-WhatIf]
@@ -1103,11 +1123,39 @@ ConfirmDelete = CONFIRM</code></pre>
                                                 [-ResetExistingTags]
                                                 [-SetWindowsTags]
                                                 [-AppendWindowsTags]
+                                                [-SkipExifTool]
                                                 [-ImagesOnly]
                                                 [-VideosOnly]
                                                 [-NoVideoSidecars]
                                                 [-UpdateExistingSidecars]
                                                 [-KeepExifToolBackups]</code></pre>
+
+  <h3>Video Windows tags / sidecars without ExifTool</h3>
+  <p>Use this when you only want to update video Windows Explorer tags and video XMP sidecars. The tag value comes from the immediate parent folder name. The date value comes from the renamed filename. ExifTool is not needed for that video-only logic.</p>
+
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -SkipExifTool `
+  -SetWindowsTags `
+  -AppendWindowsTags `
+  -UpdateExistingSidecars `
+  -WhatIf
+
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -SkipExifTool `
+  -SetWindowsTags `
+  -AppendWindowsTags `
+  -UpdateExistingSidecars</code></pre>
+
+  <div class="safe">
+    <strong>What this does:</strong> skips all image ExifTool reads/writes, creates missing video sidecars, updates existing video sidecars, and appends the parent-folder tag to Windows Explorer video tags when it is missing.
+  </div>
+
+  <div class="warning">
+    <strong>What this does not do:</strong> it does not set image Date Taken or embedded image tags. For images, ExifTool is still required.
+  </div>
+
   <h3>Reset existing tags and sidecars</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
@@ -1181,7 +1229,26 @@ python .\Find-SimilarVideos-ReviewDelete.py `
   -Csv ".\duplicate_reports\&lt;reviewed_video_csv&gt;.csv" `
   -WhatIf</code></pre>
 
-  <h3>Workflow F: Final Corrective Image Metadata / Video Sidecar Pass</h3>
+
+  <h3>Workflow F: Video Sidecars / Windows Tags Without ExifTool</h3>
+  <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -SkipExifTool `
+  -SetWindowsTags `
+  -AppendWindowsTags `
+  -UpdateExistingSidecars `
+  -WhatIf
+
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -SkipExifTool `
+  -SetWindowsTags `
+  -AppendWindowsTags `
+  -UpdateExistingSidecars</code></pre>
+
+  <p>This is useful when the images are already done or you only care about video sidecars and Windows video tags. It avoids the image ExifTool scan.</p>
+
+  <h3>Workflow G: Final Corrective Image Metadata / Video Sidecar Pass</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
   -ResetExistingTags `
