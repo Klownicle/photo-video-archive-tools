@@ -33,9 +33,9 @@ The tools are meant to help with:
 - finding image/video duplicates and near-duplicates
 - visually reviewing duplicate groups before deleting anything
 - processing only explicitly confirmed delete rows
-- creating/updating video XMP sidecars
+- creating/updating image and video XMP sidecars
 - correcting image metadata and folder-based tags
-- optionally writing Windows Explorer video tags where supported
+- optionally writing Windows Explorer tags for images/videos where supported
 
 This was built around a real cleanup workflow, not as a general-purpose commercial app.
 
@@ -147,9 +147,15 @@ Install Python requirements:
 python -m pip install -r requirements.txt
 ```
 
+Some Windows Explorer tag operations require `pywin32`:
+
+```powershell
+python -m pip install pywin32
+```
+
 ### ExifTool
 
-ExifTool is required for rename and metadata operations.
+ExifTool is required for rename and embedded image metadata operations. It can be skipped for sidecar-only and Windows-tag-only corrective passes by using `-SkipExifTool`.
 
 Get it from the official ExifTool site:
 
@@ -202,6 +208,75 @@ Verify it:
 .\ffmpeg\bin\ffmpeg.exe -version
 .\ffmpeg\bin\ffprobe.exe -version
 ```
+
+## Corrective metadata, tags, and sidecars
+
+`Correct-ImageVideoMetadataFromFilename.py` is the final corrective pass after the archive is renamed and mostly organized.
+
+It can:
+
+- set missing image Date Taken from the archive filename
+- create image XMP sidecars
+- create video XMP sidecars
+- update existing image/video sidecars
+- write the current parent-folder name as the folder tag
+- optionally write Windows Explorer Tags / `System.Keywords` for images and videos
+- skip ExifTool when you only want sidecars and/or Windows Tags
+
+The sidecar naming format is:
+
+```text
+media_file.ext.xmp
+```
+
+Examples:
+
+```text
+2022-04-09_0000000001_IMG.jpg
+2022-04-09_0000000001_IMG.jpg.xmp
+
+2022-04-09_0000000002_VID.mp4
+2022-04-09_0000000002_VID.mp4.xmp
+```
+
+The sidecars include date-taken style fields and the parent-folder tag using fields intended to be readable by tools like Immich, Lightroom/digiKam-style tag readers, and other XMP-aware tools.
+
+Useful modes:
+
+```powershell
+# Create missing image/video sidecars without doing embedded image metadata reads/writes
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -SkipExifTool `
+  -WhatIf
+
+# Create/update image sidecars only
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -ImagesOnly `
+  -SkipExifTool `
+  -UpdateExistingSidecars `
+  -WhatIf
+
+# Create/update video sidecars only
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -VideosOnly `
+  -SkipExifTool `
+  -UpdateExistingSidecars `
+  -WhatIf
+
+# Sidecars plus Windows Explorer tags for images/videos
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -SkipExifTool `
+  -SetWindowsTags `
+  -UpdateExistingSidecars `
+  -WhatIf
+```
+
+Remove `-WhatIf` only after the report looks right.
+
 
 ## Basic workflow
 
