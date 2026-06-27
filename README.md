@@ -6,6 +6,12 @@ This project was created for a practical one-time archive cleanup and is shared 
 
 ![Video duplicate review example](assets/video-review-example.png)
 
+## Why this exists
+
+I built this because I had a large personal photo/video archive to clean up and did not find a public tool that felt modern or flexible enough for the workflow I needed. I found older tools such as ImageHash-based scripts and VisiPics, but they did not feel like the right fit for my archive. In my case, I had roughly 40,000 images/videos to work through, and basic ImageHash-style configurations did not find enough of what I needed.
+
+This project was heavily vibe-coded with generative AI assistance for a specific real-world cleanup problem. It is being shared because it may be useful as a starting point for someone else, not because it is a polished, actively maintained product.
+
 ## Maintenance status
 
 This repository is shared **as-is**.
@@ -70,6 +76,12 @@ Always run rename, delete, and metadata operations with `-WhatIf` first.
 Open:
 
 [`docs/Photo_Video_Archive_Tools_Help.html`](docs/Photo_Video_Archive_Tools_Help.html)
+
+## Important warning
+
+Use this at your own choice and risk. I take no responsibility if this deletes the wrong file, corrupts metadata, breaks your workflow, or somehow sets your PC on fire.
+
+Do not run these tools directly against your only copy of important media. Test on a small copied folder first. Keep backups. Review generated CSVs before processing changes.
 
 ## License
 
