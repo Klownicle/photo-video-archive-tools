@@ -36,6 +36,7 @@ Recent additions:
   - -ResetExistingTags clears stale folder tags and resets to the current parent folder.
   - -SetWindowsTags writes Windows Explorer Tags / System.Keywords for videos where supported.
   - -VideosOnly and -ImagesOnly allow targeted corrective runs.
+  - -SkipExifTool skips image ExifTool reads/writes so video-only sidecar/Windows-tag passes can run faster.
 """
 
 from __future__ import annotations
@@ -991,7 +992,7 @@ def process(args: argparse.Namespace) -> int:
         print(f"ERROR: Root folder does not exist: {root}")
         return 2
 
-    needs_exiftool = not bool(args.videos_only)
+    needs_exiftool = not bool(args.videos_only) and not bool(args.skip_exiftool)
     if needs_exiftool and not exiftool.exists():
         print(f"ERROR: ExifTool not found: {exiftool}")
         return 2
@@ -1007,13 +1008,20 @@ def process(args: argparse.Namespace) -> int:
     print("Correct Image/Video Metadata From Filename")
     print(f"Mode:                       {'WHATIF / dry run' if args.whatif else 'LIVE'}")
     print(f"Root:                       {root}")
-    print(f"ExifTool:                   {exiftool if needs_exiftool else 'Not used in -VideosOnly mode'}")
+    if args.skip_exiftool:
+        exiftool_display = "Skipped by -SkipExifTool"
+    elif needs_exiftool:
+        exiftool_display = str(exiftool)
+    else:
+        exiftool_display = "Not used in -VideosOnly mode"
+    print(f"ExifTool:                   {exiftool_display}")
     print(f"Report CSV:                 {report_path}")
     print(f"Batch size:                 {args.batch_size}")
     print(f"Overwrite image date:       {'Yes' if args.overwrite_existing_date_taken else 'No'}")
     print(f"Image Date Taken updates:   {'No' if args.no_date_taken else 'Yes'}")
     print(f"Parent folder tags:         {'No' if args.no_parent_tag else 'Yes'}")
     print(f"Target:                     {'Images only' if args.images_only else 'Videos only' if args.videos_only else 'Images and videos'}")
+    print(f"Skip ExifTool:              {'Yes' if args.skip_exiftool else 'No'}")
     print(f"Reset existing tags:        {'Yes' if args.reset_existing_tags else 'No'}")
     print(f"Windows Explorer tags:      {'Yes' if args.set_windows_tags else 'No'}")
     print(f"Windows tag mode:           {'Append' if args.append_windows_tags else 'Replace'}")
@@ -1045,7 +1053,7 @@ def process(args: argparse.Namespace) -> int:
 
     metadata_by_source: dict[str, dict[str, Any]] = {}
 
-    if image_files:
+    if image_files and not args.skip_exiftool:
         print("Reading existing image metadata with ExifTool...")
         batch_size = max(1, int(args.batch_size))
         for start in range(0, len(image_files), batch_size):
@@ -1058,6 +1066,9 @@ def process(args: argparse.Namespace) -> int:
                     metadata_by_source[path_key(source)] = item
 
             print(f"  Read image metadata: {min(start + len(batch), len(image_files))}/{len(image_files)}")
+    elif image_files and args.skip_exiftool:
+        print("Skipping image ExifTool metadata read because -SkipExifTool was used.")
+        print("  Image Date Taken and embedded image tag updates will be skipped.")
 
     report_rows: list[dict[str, Any]] = []
 
@@ -1072,6 +1083,7 @@ def process(args: argparse.Namespace) -> int:
         "no_change": 0,
         "errors": 0,
         "tag_skipped_needs": 0,
+        "image_skipped_exiftool": 0,
     }
 
     print("Evaluating and applying corrective actions...")
@@ -1085,15 +1097,32 @@ def process(args: argparse.Namespace) -> int:
             stats["tag_skipped_needs"] += 1
 
         if kind == "IMG" and ext in SUPPORTED_IMAGE_EXTENSIONS:
-            row, outcome = process_image_file(
-                args=args,
-                exiftool=exiftool,
-                file_path=file_path,
-                filename_date=filename_date,
-                kind=kind,
-                ext=ext,
-                metadata=metadata_by_source.get(path_key(file_path), {}),
-            )
+            if args.skip_exiftool:
+                row = base_report_row(file_path, filename_date, kind, ext, True, False)
+                row.update({
+                    "ExistingDateTimeOriginal": "",
+                    "ExistingTags": "",
+                    "NeedsDateTakenUpdate": "SKIPPED",
+                    "NeedsParentTagUpdate": "SKIPPED",
+                    "ResetExistingTags": "YES" if args.reset_existing_tags else "NO",
+                    "NeedsVideoSidecar": "NO",
+                    "SidecarPath": "",
+                    "Action": "SKIPPED_IMAGE_EXIFTOOL_DISABLED",
+                    "Status": "SKIPPED",
+                    "Message": "Skipped image Date Taken and embedded image tag processing because -SkipExifTool was used.",
+                    "ExifToolOutput": "",
+                })
+                outcome = "image_skipped_exiftool"
+            else:
+                row, outcome = process_image_file(
+                    args=args,
+                    exiftool=exiftool,
+                    file_path=file_path,
+                    filename_date=filename_date,
+                    kind=kind,
+                    ext=ext,
+                    metadata=metadata_by_source.get(path_key(file_path), {}),
+                )
         elif kind == "VID" and ext in SUPPORTED_VIDEO_EXTENSIONS:
             row, outcome = process_video_file(
                 args=args,
@@ -1117,6 +1146,8 @@ def process(args: argparse.Namespace) -> int:
             stats["windows_tags_written"] += 1
         elif outcome == "no_change":
             stats["no_change"] += 1
+        elif outcome == "image_skipped_exiftool":
+            stats["image_skipped_exiftool"] += 1
         elif outcome == "error":
             stats["errors"] += 1
 
@@ -1138,6 +1169,8 @@ def process(args: argparse.Namespace) -> int:
         print(f"Video sidecars written:         {stats['video_sidecar_written']}")
         print(f"Windows tags written:           {stats['windows_tags_written']}")
         print(f"Errors:                         {stats['errors']}")
+    if args.skip_exiftool:
+        print(f"Images skipped - ExifTool:      {stats['image_skipped_exiftool']}")
     print(f"No change needed:               {stats['no_change']}")
     print(f"Report written:                 {report_path}")
 
@@ -1152,6 +1185,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("-Root", "--root", default=DEFAULT_ROOT, help="Root folder to scan recursively.")
     parser.add_argument("-ExifTool", "--exiftool", default=DEFAULT_EXIFTOOL, help="Path to exiftool.exe.")
+    parser.add_argument("-SkipExifTool", "--skip-exiftool", action="store_true", help="Skip ExifTool entirely. Images are not read or written in this mode; video sidecars and Windows video tags can still be processed.")
     parser.add_argument("-OutputFolder", "--output-folder", default="", help="Folder for the report CSV. Defaults to root.")
     parser.add_argument("-ReportCsv", "--report-csv", default="", help="Explicit report CSV path.")
     parser.add_argument("-BatchSize", "--batch-size", type=int, default=100, help="Image metadata read batch size.")
@@ -1184,6 +1218,10 @@ def main() -> int:
 
     if args.images_only and args.videos_only:
         print("ERROR: Use either -ImagesOnly or -VideosOnly, not both.")
+        return 2
+
+    if args.images_only and args.skip_exiftool:
+        print("ERROR: -ImagesOnly requires ExifTool. Do not use -SkipExifTool with -ImagesOnly.")
         return 2
 
     return process(args)
