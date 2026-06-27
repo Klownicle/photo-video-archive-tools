@@ -11,10 +11,14 @@ What this does:
        YYYY-MM-DD_0000000001_VID.ext
 
   2. Images:
-       - If Date Taken / DateTimeOriginal is missing, writes it from the filename date.
-       - Adds the immediate parent folder name as a tag/keyword.
-       - Optional -ResetExistingTags clears existing tag fields and resets
-         them to the current parent-folder tag only.
+       - Creates an XMP sidecar beside the image by default.
+       - Sidecar includes filename date fields and parent-folder tag fields.
+       - If ExifTool is enabled and embedded Date Taken / DateTimeOriginal is missing,
+         writes it from the filename date.
+       - If ExifTool is enabled, adds the immediate parent folder name as an embedded
+         tag/keyword where supported.
+       - Optional -ResetExistingTags clears existing embedded image tag fields and
+         rewrites existing sidecars with the current parent-folder tag/date values.
        - Does NOT add the parent-folder tag if the immediate parent is:
            Needs Catagorized
            Needs Categorized
@@ -22,21 +26,23 @@ What this does:
            Needs Category
 
   3. Videos:
-       - Creates an XMP sidecar beside the video.
-       - Uses the filename date for date-taken/creation-date style XMP fields.
+       - Creates an XMP sidecar beside the video by default.
+       - Sidecar includes filename date fields and parent-folder tag fields.
        - Uses the immediate parent folder name as the sidecar tag, unless parent
          is one of the Needs Catagorized / Categorized / Catagory / Category names.
        - Optional -ResetExistingTags rewrites existing sidecars so stale tags are removed.
-       - Sidecar naming:
-           video_file.ext.xmp
+
+  4. Sidecar naming for images and videos:
+       media_file.ext.xmp
 
 Always run -WhatIf first.
 
 Recent additions:
-  - -ResetExistingTags clears stale folder tags and resets to the current parent folder.
+  - Image sidecars are now supported and created by default.
+  - -ResetExistingTags clears stale folder tags and resets sidecars to the current parent folder.
   - -SetWindowsTags writes Windows Explorer Tags / System.Keywords for images and videos where supported.
   - -VideosOnly and -ImagesOnly allow targeted corrective runs.
-  - -SkipExifTool skips image ExifTool reads/writes while still allowing Windows tag updates on images/videos and sidecar updates on videos.
+  - -SkipExifTool skips embedded image ExifTool reads/writes while still allowing sidecar and Windows tag updates on images/videos.
 """
 
 from __future__ import annotations
@@ -124,7 +130,12 @@ REPORT_FIELDS = [
     "WindowsTagsAction",
     "WindowsTagsStatus",
     "WindowsTagsMessage",
+    "NeedsSidecar",
+    "NeedsImageSidecar",
     "NeedsVideoSidecar",
+    "SidecarAction",
+    "SidecarStatus",
+    "SidecarMessage",
     "SidecarPath",
     "Action",
     "Status",
@@ -246,10 +257,15 @@ def path_key(path: Path | str) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
 
+def sidecar_path_for_file(media_path: Path) -> Path:
+    # Preferred Immich-style sidecar naming for images and videos:
+    #   media_file.ext.xmp
+    return media_path.with_name(media_path.name + ".xmp")
+
+
 def sidecar_path_for_video(video_path: Path) -> Path:
-    # Preferred Immich-style sidecar naming:
-    #   video_file.ext.xmp
-    return video_path.with_name(video_path.name + ".xmp")
+    # Backwards-compatible helper name used by earlier script versions.
+    return sidecar_path_for_file(video_path)
 
 
 def scan_files(root: Path, skip_dir_names: set[str], limit: int | None = None) -> list[Path]:
@@ -467,12 +483,13 @@ def make_xmp_seq_xml(tag_name: str, values: list[str], indent: str = "      ") -
     return "\n".join(lines)
 
 
-def build_video_sidecar_xmp(
-    video_path: Path,
+def build_sidecar_xmp(
+    media_path: Path,
     filename_date: dt.datetime,
     parent_tag: str,
     include_tag: bool,
     include_date: bool,
+    kind: str,
 ) -> str:
     xmp_dt = format_xmp_datetime(filename_date)
     exif_dt = format_exif_datetime(filename_date)
@@ -481,6 +498,7 @@ def build_video_sidecar_xmp(
     if include_date:
         date_attrs = (
             f'\n      xmp:CreateDate="{xmp_dt}"'
+            f'\n      xmp:ModifyDate="{xmp_dt}"'
             f'\n      xmp:MetadataDate="{xmp_dt}"'
             f'\n      exif:DateTimeOriginal="{exif_dt}"'
             f'\n      photoshop:DateCreated="{photoshop_date}"'
@@ -499,8 +517,7 @@ def build_video_sidecar_xmp(
     if tag_xml:
         tag_xml = "\n" + tag_xml + "\n    "
 
-    original_file = xml_escape.escape(video_path.name)
-
+    original_file = xml_escape.escape(media_path.name)
     return f"""<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/">
   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -516,11 +533,69 @@ def build_video_sidecar_xmp(
         <rdf:Alt>
           <rdf:li xml:lang="x-default">{original_file}</rdf:li>
         </rdf:Alt>
-      </dc:title>{tag_xml}</rdf:Description>
+      </dc:title>
+{tag_xml}</rdf:Description>
   </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end="w"?>
 """
+
+
+def build_video_sidecar_xmp(
+    video_path: Path,
+    filename_date: dt.datetime,
+    parent_tag: str,
+    include_tag: bool,
+    include_date: bool,
+) -> str:
+    # Backwards-compatible wrapper name used by earlier script versions.
+    return build_sidecar_xmp(
+        media_path=video_path,
+        filename_date=filename_date,
+        parent_tag=parent_tag,
+        include_tag=include_tag,
+        include_date=include_date,
+        kind="VID",
+    )
+
+
+def write_xmp_sidecar(
+    media_path: Path,
+    filename_date: dt.datetime,
+    parent_tag: str,
+    include_tag: bool,
+    include_date: bool,
+    update_existing: bool,
+    whatif: bool,
+    kind: str,
+) -> tuple[str, str, str]:
+    sidecar_path = sidecar_path_for_file(media_path)
+    exists = sidecar_path.exists()
+
+    if exists and not update_existing:
+        return "SKIPPED_EXISTING_SIDECAR", "Sidecar already exists. Use -UpdateExistingSidecars to rewrite it.", str(sidecar_path)
+
+    if whatif:
+        if exists and update_existing:
+            return "WHATIF_UPDATE_SIDECAR", "Would update existing XMP sidecar.", str(sidecar_path)
+        return "WHATIF_CREATE_SIDECAR", "Would create XMP sidecar.", str(sidecar_path)
+
+    xmp = build_sidecar_xmp(
+        media_path=media_path,
+        filename_date=filename_date,
+        parent_tag=parent_tag,
+        include_tag=include_tag,
+        include_date=include_date,
+        kind=kind,
+    )
+
+    try:
+        sidecar_path.write_text(xmp, encoding="utf-8", newline="\n")
+        if exists:
+            return "UPDATED_SIDECAR", "Updated existing XMP sidecar.", str(sidecar_path)
+        return "CREATED_SIDECAR", "Created XMP sidecar.", str(sidecar_path)
+    except OSError as exc:
+        return "ERROR_SIDECAR", f"Failed to write XMP sidecar: {exc}", str(sidecar_path)
 
 
 def write_video_sidecar(
@@ -532,32 +607,76 @@ def write_video_sidecar(
     update_existing: bool,
     whatif: bool,
 ) -> tuple[str, str, str]:
-    sidecar_path = sidecar_path_for_video(video_path)
-    exists = sidecar_path.exists()
-
-    if exists and not update_existing:
-        return "SKIPPED_EXISTING_SIDECAR", "Sidecar already exists. Use -UpdateExistingSidecars to rewrite it.", str(sidecar_path)
-
-    if whatif:
-        if exists and update_existing:
-            return "WHATIF_UPDATE_SIDECAR", "Would update existing XMP sidecar.", str(sidecar_path)
-        return "WHATIF_CREATE_SIDECAR", "Would create XMP sidecar.", str(sidecar_path)
-
-    xmp = build_video_sidecar_xmp(
-        video_path=video_path,
+    # Backwards-compatible wrapper name used by earlier script versions.
+    return write_xmp_sidecar(
+        media_path=video_path,
         filename_date=filename_date,
         parent_tag=parent_tag,
         include_tag=include_tag,
         include_date=include_date,
+        update_existing=update_existing,
+        whatif=whatif,
+        kind="VID",
     )
 
-    try:
-        sidecar_path.write_text(xmp, encoding="utf-8", newline="\n")
-        if exists:
-            return "UPDATED_SIDECAR", "Updated existing XMP sidecar.", str(sidecar_path)
-        return "CREATED_SIDECAR", "Created XMP sidecar.", str(sidecar_path)
-    except OSError as exc:
-        return "ERROR_SIDECAR", f"Failed to write XMP sidecar: {exc}", str(sidecar_path)
+
+def sidecars_disabled_for_kind(args: argparse.Namespace, kind: str) -> bool:
+    if getattr(args, "no_sidecars", False):
+        return True
+    if kind.upper() == "IMG" and getattr(args, "no_image_sidecars", False):
+        return True
+    if kind.upper() == "VID" and getattr(args, "no_video_sidecars", False):
+        return True
+    return False
+
+
+def evaluate_sidecar_action(
+    args: argparse.Namespace,
+    file_path: Path,
+    filename_date: dt.datetime,
+    parent_tag: str,
+    tag_allowed: bool,
+    kind: str,
+) -> dict[str, Any]:
+    sidecar_path = sidecar_path_for_file(file_path)
+    include_tag = not args.no_parent_tag and bool(parent_tag) and tag_allowed
+    include_date = not args.no_date_taken and filename_date is not None
+    reset_sidecar = bool(args.reset_existing_tags)
+    disabled = sidecars_disabled_for_kind(args, kind)
+    should_have_sidecar = include_tag or include_date or reset_sidecar
+    rewrite_existing_sidecar = args.update_existing_sidecars or reset_sidecar
+    exists = sidecar_path.exists()
+    needs_sidecar = (
+        not disabled
+        and should_have_sidecar
+        and (rewrite_existing_sidecar or not exists)
+    )
+
+    action = "NO_CHANGE"
+    if disabled:
+        action = "SIDECARS_DISABLED"
+    elif should_have_sidecar:
+        if exists and reset_sidecar:
+            action = f"RESET_{kind.upper()}_XMP_SIDECAR"
+        elif exists and not rewrite_existing_sidecar:
+            action = f"{kind.upper()}_SIDECAR_EXISTS"
+        elif exists and rewrite_existing_sidecar:
+            action = f"UPDATE_{kind.upper()}_XMP_SIDECAR"
+        else:
+            action = f"CREATE_{kind.upper()}_XMP_SIDECAR"
+
+    return {
+        "path": sidecar_path,
+        "exists": exists,
+        "disabled": disabled,
+        "include_tag": include_tag,
+        "include_date": include_date,
+        "reset": reset_sidecar,
+        "should_have": should_have_sidecar,
+        "rewrite_existing": rewrite_existing_sidecar,
+        "needed": needs_sidecar,
+        "action": action,
+    }
 
 
 def flatten_windows_tag_values(value: Any) -> list[str]:
@@ -728,6 +847,13 @@ def base_report_row(
         "WindowsTagsAction": "",
         "WindowsTagsStatus": "",
         "WindowsTagsMessage": "",
+        "NeedsSidecar": "NO",
+        "NeedsImageSidecar": "NO",
+        "NeedsVideoSidecar": "NO",
+        "SidecarAction": "",
+        "SidecarStatus": "",
+        "SidecarMessage": "",
+        "SidecarPath": "",
     }
 
 
@@ -801,7 +927,7 @@ def process_image_file(
     kind: str,
     ext: str,
     metadata: dict[str, Any],
-) -> tuple[dict[str, Any], str]:
+) -> tuple[dict[str, Any], set[str]]:
     parent_name = file_path.parent.name
     parent_tag = parent_name.strip()
     skip_parent_tag = is_needs_categorized_name(parent_name)
@@ -809,8 +935,8 @@ def process_image_file(
     tag_allowed = not args.no_parent_tag and bool(parent_tag) and not skip_parent_tag
 
     # Embedded image metadata requires ExifTool. If -SkipExifTool is used, the
-    # script can still write Windows Explorer Tags, but it will not read/write
-    # embedded Date Taken or embedded image keyword fields.
+    # script can still write image sidecars and Windows Explorer Tags, but it will
+    # not read/write embedded Date Taken or embedded image keyword fields.
     embedded_image_enabled = not bool(args.skip_exiftool)
 
     existing_date = get_existing_datetime_original(metadata) if embedded_image_enabled else ""
@@ -835,6 +961,15 @@ def process_image_file(
         )
     )
 
+    sidecar = evaluate_sidecar_action(
+        args=args,
+        file_path=file_path,
+        filename_date=filename_date,
+        parent_tag=parent_tag,
+        tag_allowed=tag_allowed,
+        kind="IMG",
+    )
+
     windows = evaluate_windows_tag_action(
         args=args,
         file_path=file_path,
@@ -856,6 +991,14 @@ def process_image_file(
             action_parts.append("CLEAR_IMAGE_EMBEDDED_TAGS")
     elif tag_needed:
         action_parts.append("ADD_IMAGE_EMBEDDED_PARENT_FOLDER_TAG")
+    if sidecar["needed"]:
+        action_parts.append(str(sidecar["action"]))
+    elif sidecar["should_have"] and sidecar["exists"] and not sidecar["rewrite_existing"]:
+        action_parts.append("IMAGE_SIDECAR_EXISTS")
+    if sidecar["include_tag"]:
+        action_parts.append("ADD_IMAGE_PARENT_FOLDER_TAG_TO_SIDECAR")
+    if sidecar["include_date"]:
+        action_parts.append("ADD_IMAGE_DATE_FROM_FILENAME_TO_SIDECAR")
     if windows_tag_needed:
         action_parts.append(str(windows["action"]))
 
@@ -871,13 +1014,22 @@ def process_image_file(
         "WindowsTagsAction": str(windows["action"]),
         "WindowsTagsStatus": "WHATIF" if args.whatif and windows_tag_needed else "",
         "WindowsTagsMessage": "" if windows["read_message"] == "OK" else str(windows["read_message"]),
+        "NeedsSidecar": "YES" if sidecar["needed"] else "NO",
+        "NeedsImageSidecar": "YES" if sidecar["needed"] else "NO",
         "NeedsVideoSidecar": "NO",
-        "SidecarPath": "",
+        "SidecarAction": str(sidecar["action"]),
+        "SidecarStatus": "WHATIF" if args.whatif and sidecar["needed"] else "",
+        "SidecarMessage": "",
+        "SidecarPath": str(sidecar["path"]),
         "Action": "; ".join(action_parts) if action_parts else "NO_CHANGE",
         "ExifToolOutput": "",
     })
 
     embedded_needed = date_needed or tag_needed or reset_image_tags
+    outcomes: set[str] = set()
+
+    if args.skip_exiftool:
+        outcomes.add("image_embedded_metadata_skipped")
 
     if args.whatif:
         messages: list[str] = []
@@ -886,21 +1038,26 @@ def process_image_file(
         elif args.skip_exiftool:
             messages.append("Embedded image Date Taken/tag work skipped by -SkipExifTool.")
 
+        if sidecar["needed"]:
+            messages.append("Would create/update image XMP sidecar.")
+        elif sidecar["disabled"]:
+            messages.append("Image sidecar creation/update disabled.")
+        elif sidecar["should_have"] and sidecar["exists"] and not sidecar["rewrite_existing"]:
+            messages.append("Image sidecar already exists. Use -UpdateExistingSidecars or -ResetExistingTags to rewrite it.")
+
         if windows_tag_needed:
             messages.append("Would update Windows Explorer Tags / System.Keywords.")
 
-        if embedded_needed or windows_tag_needed:
+        if embedded_needed or sidecar["needed"] or windows_tag_needed:
             row.update({"Status": "WHATIF", "Message": " ".join(messages).strip()})
-            return row, "would_update"
+            return row, {"would_update"} | outcomes
 
-        row.update({"Status": "SKIPPED", "Message": "No image corrective action needed.", "ExifToolOutput": ""})
-        return row, "no_change"
+        row.update({"Status": "SKIPPED", "Message": " ".join(messages).strip() or "No image corrective action needed.", "ExifToolOutput": ""})
+        return row, ({"no_change"} | outcomes)
 
     status_parts: list[str] = []
     message_parts: list[str] = []
     errors = False
-    embedded_written = False
-    windows_written = False
 
     if embedded_needed:
         write_args = build_image_metadata_write_args(
@@ -908,7 +1065,7 @@ def process_image_file(
             filename_date=filename_date,
             date_needed=date_needed,
             tag_needed=tag_needed,
-            parent_tag=parent_tag,
+            parent_tag=parent_tag if tag_allowed else "",
             existing_tags=existing_tags,
             overwrite_original=not args.keep_exiftool_backups,
             preserve_file_times=not args.update_file_modified_time,
@@ -920,12 +1077,39 @@ def process_image_file(
         status_parts.append(status)
         message_parts.append(message)
         if status == "UPDATED":
-            embedded_written = True
+            outcomes.add("image_updated")
         elif status == "ERROR":
             errors = True
     elif args.skip_exiftool:
         status_parts.append("SKIPPED_IMAGE_EXIFTOOL")
         message_parts.append("Skipped embedded image Date Taken/tag processing because -SkipExifTool was used.")
+
+    if sidecar["disabled"]:
+        status_parts.append("SKIPPED_IMAGE_SIDECARS_DISABLED")
+        message_parts.append("Image sidecar creation/update disabled.")
+    elif not sidecar["should_have"]:
+        status_parts.append("SKIPPED_IMAGE_SIDECAR")
+        message_parts.append("No image sidecar action needed because date and parent tag actions are disabled.")
+    else:
+        sidecar_status, sidecar_message, sidecar_text = write_xmp_sidecar(
+            media_path=file_path,
+            filename_date=filename_date,
+            parent_tag=parent_tag,
+            include_tag=bool(sidecar["include_tag"]),
+            include_date=bool(sidecar["include_date"]),
+            update_existing=bool(sidecar["rewrite_existing"]),
+            whatif=False,
+            kind="IMG",
+        )
+        row["SidecarPath"] = sidecar_text
+        row["SidecarStatus"] = sidecar_status
+        row["SidecarMessage"] = sidecar_message
+        status_parts.append(sidecar_status)
+        message_parts.append(sidecar_message)
+        if sidecar_status in {"CREATED_SIDECAR", "UPDATED_SIDECAR"}:
+            outcomes.add("image_sidecar_written")
+        elif sidecar_status == "ERROR_SIDECAR":
+            errors = True
 
     if windows_tag_needed:
         windows_status, windows_message, final_windows_tags = set_windows_keywords(
@@ -940,7 +1124,7 @@ def process_image_file(
         message_parts.append(windows_message)
 
         if windows_status in {"UPDATED_WINDOWS_TAGS", "CLEARED_WINDOWS_TAGS"}:
-            windows_written = True
+            outcomes.add("windows_tags_written")
         elif windows_status == "ERROR_WINDOWS_TAGS":
             errors = True
 
@@ -954,12 +1138,10 @@ def process_image_file(
     })
 
     if errors:
-        return row, "error"
-    if embedded_written:
-        return row, "updated"
-    if windows_written:
-        return row, "windows_tags_written"
-    return row, "no_change"
+        outcomes.add("error")
+    if not (outcomes - {"image_embedded_metadata_skipped"}):
+        outcomes.add("no_change")
+    return row, outcomes
 
 
 def process_video_file(
@@ -968,28 +1150,27 @@ def process_video_file(
     filename_date: dt.datetime,
     kind: str,
     ext: str,
-) -> tuple[dict[str, Any], str]:
+) -> tuple[dict[str, Any], set[str]]:
     parent_name = file_path.parent.name
     parent_tag = parent_name.strip()
     skip_parent_tag = is_needs_categorized_name(parent_name)
-    sidecar_path = sidecar_path_for_video(file_path)
 
-    include_tag = not args.no_parent_tag and bool(parent_tag) and not skip_parent_tag
-    include_date = not args.no_date_taken
-    reset_video_sidecar = bool(args.reset_existing_tags)
-    should_have_sidecar = include_tag or include_date or reset_video_sidecar
-    rewrite_existing_sidecar = args.update_existing_sidecars or reset_video_sidecar
-    needs_sidecar = (
-        not args.no_video_sidecars
-        and should_have_sidecar
-        and (rewrite_existing_sidecar or not sidecar_path.exists())
+    tag_allowed = not args.no_parent_tag and bool(parent_tag) and not skip_parent_tag
+
+    sidecar = evaluate_sidecar_action(
+        args=args,
+        file_path=file_path,
+        filename_date=filename_date,
+        parent_tag=parent_tag,
+        tag_allowed=tag_allowed,
+        kind="VID",
     )
 
     windows = evaluate_windows_tag_action(
         args=args,
         file_path=file_path,
         parent_tag=parent_tag,
-        tag_allowed=include_tag,
+        tag_allowed=tag_allowed,
     )
     existing_windows_tags = list(windows["existing"])
     windows_read_message = str(windows["read_message"])
@@ -998,18 +1179,13 @@ def process_video_file(
     desired_windows_tags = list(windows["desired"])
 
     action_parts: list[str] = []
-    if not args.no_video_sidecars and should_have_sidecar:
-        if sidecar_path.exists() and reset_video_sidecar:
-            action_parts.append("RESET_VIDEO_XMP_SIDECAR")
-        elif sidecar_path.exists() and not rewrite_existing_sidecar:
-            action_parts.append("VIDEO_SIDECAR_EXISTS")
-        elif sidecar_path.exists() and rewrite_existing_sidecar:
-            action_parts.append("UPDATE_VIDEO_XMP_SIDECAR")
-        else:
-            action_parts.append("CREATE_VIDEO_XMP_SIDECAR")
-    if include_tag:
+    if sidecar["needed"]:
+        action_parts.append(str(sidecar["action"]))
+    elif sidecar["should_have"] and sidecar["exists"] and not sidecar["rewrite_existing"]:
+        action_parts.append("VIDEO_SIDECAR_EXISTS")
+    if sidecar["include_tag"]:
         action_parts.append("ADD_VIDEO_PARENT_FOLDER_TAG_TO_SIDECAR")
-    if include_date:
+    if sidecar["include_date"]:
         action_parts.append("ADD_VIDEO_DATE_FROM_FILENAME_TO_SIDECAR")
     if windows_tag_needed:
         action_parts.append(windows_tag_action)
@@ -1018,66 +1194,74 @@ def process_video_file(
     row.update({
         "ExistingDateTimeOriginal": "",
         "ExistingTags": "",
-        "NeedsDateTakenUpdate": "YES" if include_date else "NO",
-        "NeedsParentTagUpdate": "YES" if include_tag else "NO",
-        "ResetExistingTags": "YES" if reset_video_sidecar else "NO",
+        "NeedsDateTakenUpdate": "YES" if sidecar["include_date"] else "NO",
+        "NeedsParentTagUpdate": "YES" if sidecar["include_tag"] else "NO",
+        "ResetExistingTags": "YES" if args.reset_existing_tags else "NO",
         "NeedsWindowsTagUpdate": "YES" if windows_tag_needed else "NO",
         "ExistingWindowsTags": "; ".join(existing_windows_tags),
         "WindowsTagsAction": windows_tag_action,
         "WindowsTagsStatus": "WHATIF" if args.whatif and windows_tag_needed else "",
         "WindowsTagsMessage": "" if windows_read_message == "OK" else windows_read_message,
-        "NeedsVideoSidecar": "YES" if needs_sidecar else "NO",
-        "SidecarPath": str(sidecar_path),
+        "NeedsSidecar": "YES" if sidecar["needed"] else "NO",
+        "NeedsImageSidecar": "NO",
+        "NeedsVideoSidecar": "YES" if sidecar["needed"] else "NO",
+        "SidecarAction": str(sidecar["action"]),
+        "SidecarStatus": "WHATIF" if args.whatif and sidecar["needed"] else "",
+        "SidecarMessage": "",
+        "SidecarPath": str(sidecar["path"]),
         "Action": "; ".join(action_parts) if action_parts else "NO_CHANGE",
         "ExifToolOutput": "",
     })
 
+    outcomes: set[str] = set()
+
     if args.whatif:
         messages: list[str] = []
-        if needs_sidecar:
+        if sidecar["needed"]:
             messages.append("Would create/update video XMP sidecar.")
-        elif args.no_video_sidecars:
-            messages.append("Video sidecar creation/update disabled by -NoVideoSidecars.")
-        elif should_have_sidecar and sidecar_path.exists() and not rewrite_existing_sidecar:
+        elif sidecar["disabled"]:
+            messages.append("Video sidecar creation/update disabled.")
+        elif sidecar["should_have"] and sidecar["exists"] and not sidecar["rewrite_existing"]:
             messages.append("Video sidecar already exists. Use -UpdateExistingSidecars or -ResetExistingTags to rewrite it.")
 
         if windows_tag_needed:
             messages.append("Would update Windows Explorer Tags / System.Keywords.")
 
-        if needs_sidecar or windows_tag_needed:
+        if sidecar["needed"] or windows_tag_needed:
             row.update({"Status": "WHATIF", "Message": " ".join(messages).strip()})
-            return row, "would_update"
+            return row, {"would_update"}
 
-        row.update({"Status": "SKIPPED", "Message": "No video corrective action needed."})
-        return row, "no_change"
+        row.update({"Status": "SKIPPED", "Message": " ".join(messages).strip() or "No video corrective action needed."})
+        return row, {"no_change"}
 
     status_parts: list[str] = []
     message_parts: list[str] = []
     errors = False
-    sidecar_written = False
-    windows_written = False
 
-    if args.no_video_sidecars:
+    if sidecar["disabled"]:
         status_parts.append("SKIPPED_VIDEO_SIDECARS_DISABLED")
-        message_parts.append("Video sidecar creation/update disabled by -NoVideoSidecars.")
-    elif not should_have_sidecar:
-        status_parts.append("SKIPPED_SIDECAR")
+        message_parts.append("Video sidecar creation/update disabled.")
+    elif not sidecar["should_have"]:
+        status_parts.append("SKIPPED_VIDEO_SIDECAR")
         message_parts.append("No video sidecar action needed because date and parent tag actions are disabled.")
     else:
-        sidecar_status, sidecar_message, sidecar_text = write_video_sidecar(
-            video_path=file_path,
+        sidecar_status, sidecar_message, sidecar_text = write_xmp_sidecar(
+            media_path=file_path,
             filename_date=filename_date,
             parent_tag=parent_tag,
-            include_tag=include_tag,
-            include_date=include_date,
-            update_existing=rewrite_existing_sidecar,
+            include_tag=bool(sidecar["include_tag"]),
+            include_date=bool(sidecar["include_date"]),
+            update_existing=bool(sidecar["rewrite_existing"]),
             whatif=False,
+            kind="VID",
         )
         row["SidecarPath"] = sidecar_text
+        row["SidecarStatus"] = sidecar_status
+        row["SidecarMessage"] = sidecar_message
         status_parts.append(sidecar_status)
         message_parts.append(sidecar_message)
         if sidecar_status in {"CREATED_SIDECAR", "UPDATED_SIDECAR"}:
-            sidecar_written = True
+            outcomes.add("video_sidecar_written")
         elif sidecar_status == "ERROR_SIDECAR":
             errors = True
 
@@ -1094,7 +1278,7 @@ def process_video_file(
         message_parts.append(windows_message)
 
         if windows_status in {"UPDATED_WINDOWS_TAGS", "CLEARED_WINDOWS_TAGS"}:
-            windows_written = True
+            outcomes.add("windows_tags_written")
         elif windows_status == "ERROR_WINDOWS_TAGS":
             errors = True
 
@@ -1108,12 +1292,10 @@ def process_video_file(
     })
 
     if errors:
-        return row, "error"
-    if sidecar_written:
-        return row, "sidecar_written"
-    if windows_written:
-        return row, "windows_tags_written"
-    return row, "no_change"
+        outcomes.add("error")
+    if not outcomes:
+        outcomes.add("no_change")
+    return row, outcomes
 
 
 def process(args: argparse.Namespace) -> int:
@@ -1124,6 +1306,8 @@ def process(args: argparse.Namespace) -> int:
         print(f"ERROR: Root folder does not exist: {root}")
         return 2
 
+    # ExifTool is only required for embedded image metadata reads/writes.
+    # Sidecars and Windows Explorer Tags do not require ExifTool.
     needs_exiftool = not bool(args.videos_only) and not bool(args.skip_exiftool)
     if needs_exiftool and not exiftool.exists():
         print(f"ERROR: ExifTool not found: {exiftool}")
@@ -1150,14 +1334,17 @@ def process(args: argparse.Namespace) -> int:
     print(f"Report CSV:                 {report_path}")
     print(f"Batch size:                 {args.batch_size}")
     print(f"Overwrite image date:       {'Yes' if args.overwrite_existing_date_taken else 'No'}")
-    print(f"Image Date Taken updates:   {'No' if args.no_date_taken else 'Yes'}")
+    print(f"Embedded image updates:     {'No' if args.skip_exiftool or args.videos_only else 'Yes'}")
+    print(f"Date fields:                {'No' if args.no_date_taken else 'Yes'}")
     print(f"Parent folder tags:         {'No' if args.no_parent_tag else 'Yes'}")
     print(f"Target:                     {'Images only' if args.images_only else 'Videos only' if args.videos_only else 'Images and videos'}")
     print(f"Skip ExifTool:              {'Yes' if args.skip_exiftool else 'No'}")
     print(f"Reset existing tags:        {'Yes' if args.reset_existing_tags else 'No'}")
     print(f"Windows Explorer tags:      {'Yes' if args.set_windows_tags else 'No'}")
     print(f"Windows tag mode:           {'Append' if args.append_windows_tags else 'Replace'}")
-    print(f"Video sidecars:             {'No' if args.no_video_sidecars else 'Yes'}")
+    print(f"Sidecars:                   {'No' if args.no_sidecars else 'Yes'}")
+    print(f"Image sidecars:             {'No' if args.no_sidecars or args.no_image_sidecars else 'Yes'}")
+    print(f"Video sidecars:             {'No' if args.no_sidecars or args.no_video_sidecars else 'Yes'}")
     print(f"Update existing sidecars:   {'Yes' if args.update_existing_sidecars else 'No'}")
     print()
 
@@ -1200,7 +1387,8 @@ def process(args: argparse.Namespace) -> int:
             print(f"  Read image metadata: {min(start + len(batch), len(image_files))}/{len(image_files)}")
     elif image_files and args.skip_exiftool:
         print("Skipping image ExifTool metadata read because -SkipExifTool was used.")
-        print("  Embedded image Date Taken/image keyword updates will be skipped, but Windows Tags can still be processed if -SetWindowsTags was used.")
+        print("  Embedded image Date Taken/image keyword updates will be skipped.")
+        print("  Image sidecars and Windows Tags can still be processed if enabled.")
 
     report_rows: list[dict[str, Any]] = []
 
@@ -1210,12 +1398,13 @@ def process(args: argparse.Namespace) -> int:
         "video_files": len(video_files),
         "would_update": 0,
         "image_updated": 0,
+        "image_sidecar_written": 0,
         "video_sidecar_written": 0,
         "windows_tags_written": 0,
         "no_change": 0,
         "errors": 0,
         "tag_skipped_needs": 0,
-        "image_skipped_exiftool": 0,
+        "image_embedded_metadata_skipped": 0,
     }
 
     print("Evaluating and applying corrective actions...")
@@ -1229,7 +1418,7 @@ def process(args: argparse.Namespace) -> int:
             stats["tag_skipped_needs"] += 1
 
         if kind == "IMG" and ext in SUPPORTED_IMAGE_EXTENSIONS:
-            row, outcome = process_image_file(
+            row, outcomes = process_image_file(
                 args=args,
                 exiftool=exiftool,
                 file_path=file_path,
@@ -1239,7 +1428,7 @@ def process(args: argparse.Namespace) -> int:
                 metadata=metadata_by_source.get(path_key(file_path), {}),
             )
         elif kind == "VID" and ext in SUPPORTED_VIDEO_EXTENSIONS:
-            row, outcome = process_video_file(
+            row, outcomes = process_video_file(
                 args=args,
                 file_path=file_path,
                 filename_date=filename_date,
@@ -1251,20 +1440,22 @@ def process(args: argparse.Namespace) -> int:
 
         report_rows.append(row)
 
-        if outcome in {"would_update", "would_sidecar"}:
+        if "would_update" in outcomes:
             stats["would_update"] += 1
-        elif outcome == "updated":
+        if "image_updated" in outcomes:
             stats["image_updated"] += 1
-        elif outcome == "sidecar_written":
+        if "image_sidecar_written" in outcomes:
+            stats["image_sidecar_written"] += 1
+        if "video_sidecar_written" in outcomes:
             stats["video_sidecar_written"] += 1
-        elif outcome == "windows_tags_written":
+        if "windows_tags_written" in outcomes:
             stats["windows_tags_written"] += 1
-        elif outcome == "no_change":
-            stats["no_change"] += 1
-        elif outcome == "image_skipped_exiftool":
-            stats["image_skipped_exiftool"] += 1
-        elif outcome == "error":
+        if "image_embedded_metadata_skipped" in outcomes:
+            stats["image_embedded_metadata_skipped"] += 1
+        if "error" in outcomes:
             stats["errors"] += 1
+        if outcomes == {"no_change"} or outcomes == {"no_change", "image_embedded_metadata_skipped"}:
+            stats["no_change"] += 1
 
         if index % 250 == 0 or index == len(files):
             print(f"  Processed: {index}/{len(files)}")
@@ -1280,12 +1471,13 @@ def process(args: argparse.Namespace) -> int:
     if args.whatif:
         print(f"Files that would be updated:    {stats['would_update']}")
     else:
-        print(f"Image files updated:            {stats['image_updated']}")
+        print(f"Image embedded files updated:   {stats['image_updated']}")
+        print(f"Image sidecars written:         {stats['image_sidecar_written']}")
         print(f"Video sidecars written:         {stats['video_sidecar_written']}")
         print(f"Windows tags written:           {stats['windows_tags_written']}")
         print(f"Errors:                         {stats['errors']}")
     if args.skip_exiftool:
-        print(f"Images embedded metadata skipped - ExifTool: {stats['image_skipped_exiftool']}")
+        print(f"Images embedded metadata skipped - ExifTool: {stats['image_embedded_metadata_skipped']}")
     print(f"No change needed:               {stats['no_change']}")
     print(f"Report written:                 {report_path}")
 
@@ -1294,29 +1486,31 @@ def process(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Correct image metadata and create video sidecars from renamed filename dates and parent folder names.",
+        description="Correct image metadata and create image/video sidecars from renamed filename dates and parent folder names.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
     parser.add_argument("-Root", "--root", default=DEFAULT_ROOT, help="Root folder to scan recursively.")
     parser.add_argument("-ExifTool", "--exiftool", default=DEFAULT_EXIFTOOL, help="Path to exiftool.exe.")
-    parser.add_argument("-SkipExifTool", "--skip-exiftool", action="store_true", help="Skip ExifTool entirely. Embedded image Date Taken / image keyword writes are skipped, but Windows tag updates for images/videos and video sidecar updates can still be processed.")
+    parser.add_argument("-SkipExifTool", "--skip-exiftool", action="store_true", help="Skip ExifTool entirely. Embedded image Date Taken / image keyword writes are skipped, but image/video sidecars and Windows tag updates can still be processed.")
     parser.add_argument("-OutputFolder", "--output-folder", default="", help="Folder for the report CSV. Defaults to root.")
     parser.add_argument("-ReportCsv", "--report-csv", default="", help="Explicit report CSV path.")
     parser.add_argument("-BatchSize", "--batch-size", type=int, default=100, help="Image metadata read batch size.")
     parser.add_argument("-Limit", "--limit", type=int, default=0, help="Limit number of matching files for testing. 0 means no limit.")
     parser.add_argument("-ImagesOnly", "--images-only", action="store_true", help="Process only renamed image files.")
-    parser.add_argument("-VideosOnly", "--videos-only", action="store_true", help="Process only renamed video files. ExifTool is not required in this mode unless image processing is also enabled.")
-    parser.add_argument("-WhatIf", "--whatif", action="store_true", help="Dry run. Do not write image metadata, video sidecars, or Windows Explorer tags.")
+    parser.add_argument("-VideosOnly", "--videos-only", action="store_true", help="Process only renamed video files. ExifTool is not required in this mode.")
+    parser.add_argument("-WhatIf", "--whatif", action="store_true", help="Dry run. Do not write embedded image metadata, image/video sidecars, or Windows Explorer tags.")
 
     parser.add_argument("-OverwriteExistingDateTaken", "--overwrite-existing-date-taken", action="store_true", help="Overwrite image DateTimeOriginal even when it already exists.")
-    parser.add_argument("-NoDateTaken", "--no-date-taken", action="store_true", help="Do not update image Date Taken or video sidecar date fields.")
+    parser.add_argument("-NoDateTaken", "--no-date-taken", action="store_true", help="Do not update image Date Taken or image/video sidecar date fields.")
     parser.add_argument("-NoParentTag", "--no-parent-tag", action="store_true", help="Do not add the immediate parent folder name as a tag.")
-    parser.add_argument("-ResetExistingTags", "--reset-existing-tags", action="store_true", help="Clear existing image tag fields and reset them to the current parent-folder tag. Also rewrites existing video sidecars with current tag/date values.")
+    parser.add_argument("-ResetExistingTags", "--reset-existing-tags", action="store_true", help="Clear existing embedded image tag fields and reset them to the current parent-folder tag. Also rewrites existing image/video sidecars with current tag/date values.")
     parser.add_argument("-SetWindowsTags", "--set-windows-tags", action="store_true", help="Set Windows Explorer Tags / System.Keywords to the current parent-folder tag for supported images and videos. Requires pywin32.")
     parser.add_argument("-AppendWindowsTags", "--append-windows-tags", action="store_true", help="Append the parent-folder tag to existing Windows Explorer tags instead of replacing them. Used with -SetWindowsTags.")
+    parser.add_argument("-NoSidecars", "--no-sidecars", action="store_true", help="Do not create/update any image or video XMP sidecars.")
+    parser.add_argument("-NoImageSidecars", "--no-image-sidecars", action="store_true", help="Do not create/update image XMP sidecars.")
     parser.add_argument("-NoVideoSidecars", "--no-video-sidecars", action="store_true", help="Do not create/update video XMP sidecars.")
-    parser.add_argument("-UpdateExistingSidecars", "--update-existing-sidecars", action="store_true", help="Rewrite existing video .xmp sidecars.")
+    parser.add_argument("-UpdateExistingSidecars", "--update-existing-sidecars", action="store_true", help="Rewrite existing image/video .xmp sidecars.")
     parser.add_argument("-KeepExifToolBackups", "--keep-exiftool-backups", action="store_true", help="Allow ExifTool to create *_original backups for image writes.")
     parser.add_argument("-UpdateFileModifiedTime", "--update-file-modified-time", action="store_true", help="Do not preserve image filesystem modified time when writing embedded metadata.")
     parser.add_argument("-SkipDirName", "--skip-dir-name", action="append", default=[], help="Directory name to skip. Can be used multiple times.")
