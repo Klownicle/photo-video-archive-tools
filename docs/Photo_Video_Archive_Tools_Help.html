@@ -279,8 +279,8 @@ YYYY-MM-DD_0000000002_VID.ext</code></pre>
     <thead><tr><th>Run type</th><th>ExifTool needed?</th><th>What happens</th></tr></thead>
     <tbody>
       <tr><td>Default run, no targeting flags</td><td>Yes</td><td>Images are checked with ExifTool; videos get sidecars as needed.</td></tr>
-      <tr><td><code>-VideosOnly</code></td><td>No</td><td>Only videos are scanned/processed. Sidecars and Windows video tags can be handled without ExifTool.</td></tr>
-      <tr><td><code>-SkipExifTool</code></td><td>No</td><td>Images are reported as skipped; video sidecars and Windows video tags can still be processed.</td></tr>
+      <tr><td><code>-VideosOnly</code></td><td>No</td><td>Only videos are scanned/processed. Sidecars and Windows image/video tags can be handled without ExifTool.</td></tr>
+      <tr><td><code>-SkipExifTool</code></td><td>No</td><td>Images are reported as skipped; video sidecars and Windows image/video tags can still be processed.</td></tr>
       <tr><td><code>-ImagesOnly</code></td><td>Yes</td><td>Image Date Taken and embedded image tags require ExifTool.</td></tr>
     </tbody>
   </table>
@@ -1110,7 +1110,7 @@ ConfirmDelete = CONFIRM</code></pre>
     <li>Does not add the parent-folder tag if the immediate parent folder is <code>Needs Catagorized</code>, <code>Needs Categorized</code>, <code>Needs Catagory</code>, or <code>Needs Category</code>.</li>
     <li>Creates video sidecars using <code>video_file.ext.xmp</code> naming.</li>
     <li><code>-ResetExistingTags</code> clears stale image tag fields and rewrites existing video sidecars.</li>
-    <li><code>-SkipExifTool</code> skips ExifTool and skips image processing; video sidecars and Windows video tags can still be processed.</li>
+    <li><code>-SkipExifTool</code> skips ExifTool and skips image processing; video sidecars and Windows image/video tags can still be processed.</li>
   </ul>
   <h3>Syntax</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py -Root &lt;folder&gt; [-WhatIf]
@@ -1130,8 +1130,26 @@ ConfirmDelete = CONFIRM</code></pre>
                                                 [-UpdateExistingSidecars]
                                                 [-KeepExifToolBackups]</code></pre>
 
-  <h3>Video Windows tags / sidecars without ExifTool</h3>
-  <p>Use this when you only want to update video Windows Explorer tags and video XMP sidecars. The tag value comes from the immediate parent folder name. The date value comes from the renamed filename. ExifTool is not needed for that video-only logic.</p>
+
+  <h3>What <code>-SetWindowsTags</code> means</h3>
+  <p><code>-SetWindowsTags</code> uses the immediate parent folder name and writes it to Windows Explorer Tags / <code>System.Keywords</code> for supported renamed images and videos.</p>
+
+  <table>
+    <thead><tr><th>Switches</th><th>Windows tag behavior</th></tr></thead>
+    <tbody>
+      <tr><td><code>-SetWindowsTags</code></td><td>Replace Windows Tags with the current parent-folder tag, unless they already exactly match.</td></tr>
+      <tr><td><code>-SetWindowsTags -AppendWindowsTags</code></td><td>Preserve existing Windows Tags and add the current parent-folder tag only if missing.</td></tr>
+      <tr><td><code>-SetWindowsTags -ResetExistingTags</code></td><td>Force Windows Tags to the current parent-folder tag. For Needs Categorized-style folders, clear tags instead of writing the staging folder name.</td></tr>
+      <tr><td><code>-SkipExifTool -SetWindowsTags</code></td><td>Skip embedded image metadata work, but still update Windows Explorer Tags for images/videos.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="info">
+    <strong>Important:</strong> image Date Taken and embedded image keyword fields still require ExifTool. Windows Explorer Tags do not.
+  </div>
+
+  <h3>Windows tags / video sidecars without ExifTool</h3>
+  <p>Use this when you want Windows Explorer Tags set from the immediate parent folder without waiting for an image ExifTool scan. This can process image and video Windows Tags. It can also create/update video sidecars because sidecars are built from the renamed filename date and parent folder.</p>
 
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
@@ -1149,12 +1167,13 @@ python .\Correct-ImageVideoMetadataFromFilename.py `
   -UpdateExistingSidecars</code></pre>
 
   <div class="safe">
-    <strong>What this does:</strong> skips all image ExifTool reads/writes, creates missing video sidecars, updates existing video sidecars, and appends the parent-folder tag to Windows Explorer video tags when it is missing.
+    <strong>What this does:</strong> skips embedded image Date Taken/keyword work, updates Windows Explorer Tags for supported images/videos, creates missing video sidecars, updates existing video sidecars, and appends the parent-folder tag when it is missing.
   </div>
 
   <div class="warning">
-    <strong>What this does not do:</strong> it does not set image Date Taken or embedded image tags. For images, ExifTool is still required.
+    <strong>What this does not do:</strong> it does not set image Date Taken or embedded image keyword tags. For those, run the normal corrective pass without <code>-SkipExifTool</code>.
   </div>
+
 
   <h3>Reset existing tags and sidecars</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
@@ -1230,7 +1249,7 @@ python .\Find-SimilarVideos-ReviewDelete.py `
   -WhatIf</code></pre>
 
 
-  <h3>Workflow F: Video Sidecars / Windows Tags Without ExifTool</h3>
+  <h3>Workflow F: Windows Tags / Video Sidecars Without ExifTool</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
   -SkipExifTool `
@@ -1246,7 +1265,7 @@ python .\Correct-ImageVideoMetadataFromFilename.py `
   -AppendWindowsTags `
   -UpdateExistingSidecars</code></pre>
 
-  <p>This is useful when the images are already done or you only care about video sidecars and Windows video tags. It avoids the image ExifTool scan.</p>
+  <p>This is useful when you want Windows Tags from folder names without doing the embedded image metadata pass. It updates supported image/video Windows Tags and can also create/update video sidecars.</p>
 
   <h3>Workflow G: Final Corrective Image Metadata / Video Sidecar Pass</h3>
   <pre><code>python .\Correct-ImageVideoMetadataFromFilename.py `
