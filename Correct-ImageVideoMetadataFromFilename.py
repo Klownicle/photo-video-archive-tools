@@ -34,9 +34,9 @@ Always run -WhatIf first.
 
 Recent additions:
   - -ResetExistingTags clears stale folder tags and resets to the current parent folder.
-  - -SetWindowsTags writes Windows Explorer Tags / System.Keywords for videos where supported.
+  - -SetWindowsTags writes Windows Explorer Tags / System.Keywords for images and videos where supported.
   - -VideosOnly and -ImagesOnly allow targeted corrective runs.
-  - -SkipExifTool skips image ExifTool reads/writes so video-only sidecar/Windows-tag passes can run faster.
+  - -SkipExifTool skips image ExifTool reads/writes while still allowing Windows tag updates on images/videos and sidecar updates on videos.
 """
 
 from __future__ import annotations
@@ -731,6 +731,68 @@ def base_report_row(
     }
 
 
+
+def evaluate_windows_tag_action(
+    args: argparse.Namespace,
+    file_path: Path,
+    parent_tag: str,
+    tag_allowed: bool,
+) -> dict[str, Any]:
+    """
+    Determine whether Windows Explorer Tags / System.Keywords should be written.
+
+    -SetWindowsTags applies to both images and videos.
+    Without -AppendWindowsTags, the desired Windows tag list is the current
+    parent-folder tag only.
+    With -AppendWindowsTags, the desired list is existing tags plus the
+    current parent-folder tag, deduplicated.
+    Needs Categorized-style folders are not written as tags. With
+    -ResetExistingTags, existing Windows tags are cleared for those staging folders.
+    """
+    existing_windows_tags: list[str] = []
+    windows_read_message = ""
+    windows_tag_needed = False
+    windows_tag_action = "NO_CHANGE"
+    desired_windows_tags: list[str] = []
+
+    if not args.set_windows_tags:
+        return {
+            "existing": existing_windows_tags,
+            "read_message": windows_read_message,
+            "needed": windows_tag_needed,
+            "action": windows_tag_action,
+            "desired": desired_windows_tags,
+        }
+
+    existing_windows_tags, windows_read_message = get_windows_keywords(file_path)
+
+    if tag_allowed:
+        if args.append_windows_tags:
+            desired_windows_tags = unique_tag_list(existing_windows_tags + [parent_tag])
+            windows_tag_action = "APPEND_WINDOWS_PARENT_FOLDER_TAG"
+        else:
+            desired_windows_tags = unique_tag_list([parent_tag])
+            windows_tag_action = "SET_WINDOWS_TAGS_TO_PARENT_FOLDER"
+
+        windows_tag_needed = (
+            bool(args.reset_existing_tags)
+            or not windows_tag_lists_equal(existing_windows_tags, desired_windows_tags)
+        )
+
+    elif not args.no_parent_tag and args.reset_existing_tags and existing_windows_tags:
+        desired_windows_tags = []
+        windows_tag_action = "CLEAR_WINDOWS_TAGS"
+        windows_tag_needed = True
+
+    return {
+        "existing": existing_windows_tags,
+        "read_message": windows_read_message,
+        "needed": windows_tag_needed,
+        "action": windows_tag_action,
+        "desired": desired_windows_tags,
+    }
+
+
 def process_image_file(
     args: argparse.Namespace,
     exiftool: Path,
@@ -744,74 +806,160 @@ def process_image_file(
     parent_tag = parent_name.strip()
     skip_parent_tag = is_needs_categorized_name(parent_name)
 
-    existing_date = get_existing_datetime_original(metadata)
-    existing_tags = collect_existing_tags(metadata)
+    tag_allowed = not args.no_parent_tag and bool(parent_tag) and not skip_parent_tag
+
+    # Embedded image metadata requires ExifTool. If -SkipExifTool is used, the
+    # script can still write Windows Explorer Tags, but it will not read/write
+    # embedded Date Taken or embedded image keyword fields.
+    embedded_image_enabled = not bool(args.skip_exiftool)
+
+    existing_date = get_existing_datetime_original(metadata) if embedded_image_enabled else ""
+    existing_tags = collect_existing_tags(metadata) if embedded_image_enabled else []
     existing_tag_norms = {normalize_tag(t) for t in existing_tags}
 
     date_needed = (
-        not args.no_date_taken
+        embedded_image_enabled
+        and not args.no_date_taken
         and filename_date is not None
         and (args.overwrite_existing_date_taken or not existing_date)
     )
 
-    reset_image_tags = bool(args.reset_existing_tags)
-    tag_allowed = not args.no_parent_tag and bool(parent_tag) and not skip_parent_tag
+    reset_image_tags = embedded_image_enabled and bool(args.reset_existing_tags)
 
     tag_needed = (
-        tag_allowed
+        embedded_image_enabled
+        and tag_allowed
         and (
             reset_image_tags
             or normalize_tag(parent_tag) not in existing_tag_norms
         )
     )
 
+    windows = evaluate_windows_tag_action(
+        args=args,
+        file_path=file_path,
+        parent_tag=parent_tag,
+        tag_allowed=tag_allowed,
+    )
+    windows_tag_needed = bool(windows["needed"])
+
     action_parts: list[str] = []
+
+    if args.skip_exiftool:
+        action_parts.append("SKIP_IMAGE_EXIFTOOL_EMBEDDED_METADATA")
     if date_needed:
         action_parts.append("SET_IMAGE_DATE_TAKEN_FROM_FILENAME")
     if reset_image_tags:
         if tag_allowed:
-            action_parts.append("RESET_IMAGE_TAGS_TO_PARENT_FOLDER")
+            action_parts.append("RESET_IMAGE_EMBEDDED_TAGS_TO_PARENT_FOLDER")
         else:
-            action_parts.append("CLEAR_IMAGE_TAGS")
+            action_parts.append("CLEAR_IMAGE_EMBEDDED_TAGS")
     elif tag_needed:
-        action_parts.append("ADD_IMAGE_PARENT_FOLDER_TAG")
+        action_parts.append("ADD_IMAGE_EMBEDDED_PARENT_FOLDER_TAG")
+    if windows_tag_needed:
+        action_parts.append(str(windows["action"]))
 
     row = base_report_row(file_path, filename_date, kind, ext, True, False)
     row.update({
         "ExistingDateTimeOriginal": existing_date,
         "ExistingTags": "; ".join(existing_tags),
-        "NeedsDateTakenUpdate": "YES" if date_needed else "NO",
-        "NeedsParentTagUpdate": "YES" if tag_needed else "NO",
-        "ResetExistingTags": "YES" if reset_image_tags else "NO",
+        "NeedsDateTakenUpdate": "YES" if date_needed else "SKIPPED" if args.skip_exiftool else "NO",
+        "NeedsParentTagUpdate": "YES" if tag_needed else "SKIPPED" if args.skip_exiftool else "NO",
+        "ResetExistingTags": "YES" if args.reset_existing_tags else "NO",
+        "NeedsWindowsTagUpdate": "YES" if windows_tag_needed else "NO",
+        "ExistingWindowsTags": "; ".join(windows["existing"]),
+        "WindowsTagsAction": str(windows["action"]),
+        "WindowsTagsStatus": "WHATIF" if args.whatif and windows_tag_needed else "",
+        "WindowsTagsMessage": "" if windows["read_message"] == "OK" else str(windows["read_message"]),
         "NeedsVideoSidecar": "NO",
         "SidecarPath": "",
         "Action": "; ".join(action_parts) if action_parts else "NO_CHANGE",
+        "ExifToolOutput": "",
     })
 
-    if not date_needed and not tag_needed and not reset_image_tags:
+    embedded_needed = date_needed or tag_needed or reset_image_tags
+
+    if args.whatif:
+        messages: list[str] = []
+        if embedded_needed:
+            messages.append("Would apply embedded image metadata action(s) with ExifTool.")
+        elif args.skip_exiftool:
+            messages.append("Embedded image Date Taken/tag work skipped by -SkipExifTool.")
+
+        if windows_tag_needed:
+            messages.append("Would update Windows Explorer Tags / System.Keywords.")
+
+        if embedded_needed or windows_tag_needed:
+            row.update({"Status": "WHATIF", "Message": " ".join(messages).strip()})
+            return row, "would_update"
+
         row.update({"Status": "SKIPPED", "Message": "No image corrective action needed.", "ExifToolOutput": ""})
         return row, "no_change"
 
-    if args.whatif:
-        row.update({"Status": "WHATIF", "Message": "Would apply image corrective metadata action(s).", "ExifToolOutput": ""})
-        return row, "would_update"
+    status_parts: list[str] = []
+    message_parts: list[str] = []
+    errors = False
+    embedded_written = False
+    windows_written = False
 
-    write_args = build_image_metadata_write_args(
-        path=file_path,
-        filename_date=filename_date,
-        date_needed=date_needed,
-        tag_needed=tag_needed,
-        parent_tag=parent_tag,
-        existing_tags=existing_tags,
-        overwrite_original=not args.keep_exiftool_backups,
-        preserve_file_times=not args.update_file_modified_time,
-        reset_existing_tags=reset_image_tags,
-    )
+    if embedded_needed:
+        write_args = build_image_metadata_write_args(
+            path=file_path,
+            filename_date=filename_date,
+            date_needed=date_needed,
+            tag_needed=tag_needed,
+            parent_tag=parent_tag,
+            existing_tags=existing_tags,
+            overwrite_original=not args.keep_exiftool_backups,
+            preserve_file_times=not args.update_file_modified_time,
+            reset_existing_tags=reset_image_tags,
+        )
 
-    status, message, output = run_exiftool_write(exiftool, file_path, write_args)
-    row.update({"Status": status, "Message": message, "ExifToolOutput": output})
+        status, message, output = run_exiftool_write(exiftool, file_path, write_args)
+        row["ExifToolOutput"] = output
+        status_parts.append(status)
+        message_parts.append(message)
+        if status == "UPDATED":
+            embedded_written = True
+        elif status == "ERROR":
+            errors = True
+    elif args.skip_exiftool:
+        status_parts.append("SKIPPED_IMAGE_EXIFTOOL")
+        message_parts.append("Skipped embedded image Date Taken/tag processing because -SkipExifTool was used.")
 
-    return row, "updated" if status == "UPDATED" else "error"
+    if windows_tag_needed:
+        windows_status, windows_message, final_windows_tags = set_windows_keywords(
+            file_path,
+            list(windows["desired"]),
+        )
+        row["WindowsTagsStatus"] = windows_status
+        row["WindowsTagsMessage"] = windows_message
+        if final_windows_tags:
+            row["ExistingWindowsTags"] = "; ".join(final_windows_tags)
+        status_parts.append(windows_status)
+        message_parts.append(windows_message)
+
+        if windows_status in {"UPDATED_WINDOWS_TAGS", "CLEARED_WINDOWS_TAGS"}:
+            windows_written = True
+        elif windows_status == "ERROR_WINDOWS_TAGS":
+            errors = True
+
+    if not status_parts:
+        status_parts.append("SKIPPED")
+        message_parts.append("No image corrective action needed.")
+
+    row.update({
+        "Status": "; ".join(status_parts),
+        "Message": " ".join(message_parts).strip(),
+    })
+
+    if errors:
+        return row, "error"
+    if embedded_written:
+        return row, "updated"
+    if windows_written:
+        return row, "windows_tags_written"
+    return row, "no_change"
 
 
 def process_video_file(
@@ -837,33 +985,17 @@ def process_video_file(
         and (rewrite_existing_sidecar or not sidecar_path.exists())
     )
 
-    existing_windows_tags: list[str] = []
-    windows_read_message = ""
-    windows_tag_needed = False
-    windows_tag_action = "NO_CHANGE"
-    desired_windows_tags: list[str] = []
-
-    if args.set_windows_tags:
-        existing_windows_tags, windows_read_message = get_windows_keywords(file_path)
-
-        if not args.no_parent_tag and include_tag:
-            if args.append_windows_tags:
-                desired_windows_tags = unique_tag_list(existing_windows_tags + [parent_tag])
-                windows_tag_action = "APPEND_WINDOWS_PARENT_FOLDER_TAG"
-            else:
-                desired_windows_tags = unique_tag_list([parent_tag])
-                windows_tag_action = "SET_WINDOWS_TAGS_TO_PARENT_FOLDER"
-
-            windows_tag_needed = (
-                bool(args.reset_existing_tags)
-                or not windows_tag_lists_equal(existing_windows_tags, desired_windows_tags)
-            )
-
-        elif not args.no_parent_tag and args.reset_existing_tags and existing_windows_tags:
-            # Needs Categorized folders intentionally do not get the parent-folder tag.
-            desired_windows_tags = []
-            windows_tag_action = "CLEAR_WINDOWS_TAGS"
-            windows_tag_needed = True
+    windows = evaluate_windows_tag_action(
+        args=args,
+        file_path=file_path,
+        parent_tag=parent_tag,
+        tag_allowed=include_tag,
+    )
+    existing_windows_tags = list(windows["existing"])
+    windows_read_message = str(windows["read_message"])
+    windows_tag_needed = bool(windows["needed"])
+    windows_tag_action = str(windows["action"])
+    desired_windows_tags = list(windows["desired"])
 
     action_parts: list[str] = []
     if not args.no_video_sidecars and should_have_sidecar:
@@ -1068,7 +1200,7 @@ def process(args: argparse.Namespace) -> int:
             print(f"  Read image metadata: {min(start + len(batch), len(image_files))}/{len(image_files)}")
     elif image_files and args.skip_exiftool:
         print("Skipping image ExifTool metadata read because -SkipExifTool was used.")
-        print("  Image Date Taken and embedded image tag updates will be skipped.")
+        print("  Embedded image Date Taken/image keyword updates will be skipped, but Windows Tags can still be processed if -SetWindowsTags was used.")
 
     report_rows: list[dict[str, Any]] = []
 
@@ -1097,32 +1229,15 @@ def process(args: argparse.Namespace) -> int:
             stats["tag_skipped_needs"] += 1
 
         if kind == "IMG" and ext in SUPPORTED_IMAGE_EXTENSIONS:
-            if args.skip_exiftool:
-                row = base_report_row(file_path, filename_date, kind, ext, True, False)
-                row.update({
-                    "ExistingDateTimeOriginal": "",
-                    "ExistingTags": "",
-                    "NeedsDateTakenUpdate": "SKIPPED",
-                    "NeedsParentTagUpdate": "SKIPPED",
-                    "ResetExistingTags": "YES" if args.reset_existing_tags else "NO",
-                    "NeedsVideoSidecar": "NO",
-                    "SidecarPath": "",
-                    "Action": "SKIPPED_IMAGE_EXIFTOOL_DISABLED",
-                    "Status": "SKIPPED",
-                    "Message": "Skipped image Date Taken and embedded image tag processing because -SkipExifTool was used.",
-                    "ExifToolOutput": "",
-                })
-                outcome = "image_skipped_exiftool"
-            else:
-                row, outcome = process_image_file(
-                    args=args,
-                    exiftool=exiftool,
-                    file_path=file_path,
-                    filename_date=filename_date,
-                    kind=kind,
-                    ext=ext,
-                    metadata=metadata_by_source.get(path_key(file_path), {}),
-                )
+            row, outcome = process_image_file(
+                args=args,
+                exiftool=exiftool,
+                file_path=file_path,
+                filename_date=filename_date,
+                kind=kind,
+                ext=ext,
+                metadata=metadata_by_source.get(path_key(file_path), {}),
+            )
         elif kind == "VID" and ext in SUPPORTED_VIDEO_EXTENSIONS:
             row, outcome = process_video_file(
                 args=args,
@@ -1170,7 +1285,7 @@ def process(args: argparse.Namespace) -> int:
         print(f"Windows tags written:           {stats['windows_tags_written']}")
         print(f"Errors:                         {stats['errors']}")
     if args.skip_exiftool:
-        print(f"Images skipped - ExifTool:      {stats['image_skipped_exiftool']}")
+        print(f"Images embedded metadata skipped - ExifTool: {stats['image_skipped_exiftool']}")
     print(f"No change needed:               {stats['no_change']}")
     print(f"Report written:                 {report_path}")
 
@@ -1185,7 +1300,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("-Root", "--root", default=DEFAULT_ROOT, help="Root folder to scan recursively.")
     parser.add_argument("-ExifTool", "--exiftool", default=DEFAULT_EXIFTOOL, help="Path to exiftool.exe.")
-    parser.add_argument("-SkipExifTool", "--skip-exiftool", action="store_true", help="Skip ExifTool entirely. Images are not read or written in this mode; video sidecars and Windows video tags can still be processed.")
+    parser.add_argument("-SkipExifTool", "--skip-exiftool", action="store_true", help="Skip ExifTool entirely. Embedded image Date Taken / image keyword writes are skipped, but Windows tag updates for images/videos and video sidecar updates can still be processed.")
     parser.add_argument("-OutputFolder", "--output-folder", default="", help="Folder for the report CSV. Defaults to root.")
     parser.add_argument("-ReportCsv", "--report-csv", default="", help="Explicit report CSV path.")
     parser.add_argument("-BatchSize", "--batch-size", type=int, default=100, help="Image metadata read batch size.")
@@ -1198,7 +1313,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-NoDateTaken", "--no-date-taken", action="store_true", help="Do not update image Date Taken or video sidecar date fields.")
     parser.add_argument("-NoParentTag", "--no-parent-tag", action="store_true", help="Do not add the immediate parent folder name as a tag.")
     parser.add_argument("-ResetExistingTags", "--reset-existing-tags", action="store_true", help="Clear existing image tag fields and reset them to the current parent-folder tag. Also rewrites existing video sidecars with current tag/date values.")
-    parser.add_argument("-SetWindowsTags", "--set-windows-tags", action="store_true", help="For videos, set Windows Explorer Tags / System.Keywords to the current parent-folder tag. Requires pywin32. Use -VideosOnly to target only videos.")
+    parser.add_argument("-SetWindowsTags", "--set-windows-tags", action="store_true", help="Set Windows Explorer Tags / System.Keywords to the current parent-folder tag for supported images and videos. Requires pywin32.")
     parser.add_argument("-AppendWindowsTags", "--append-windows-tags", action="store_true", help="Append the parent-folder tag to existing Windows Explorer tags instead of replacing them. Used with -SetWindowsTags.")
     parser.add_argument("-NoVideoSidecars", "--no-video-sidecars", action="store_true", help="Do not create/update video XMP sidecars.")
     parser.add_argument("-UpdateExistingSidecars", "--update-existing-sidecars", action="store_true", help="Rewrite existing video .xmp sidecars.")
@@ -1220,9 +1335,6 @@ def main() -> int:
         print("ERROR: Use either -ImagesOnly or -VideosOnly, not both.")
         return 2
 
-    if args.images_only and args.skip_exiftool:
-        print("ERROR: -ImagesOnly requires ExifTool. Do not use -SkipExifTool with -ImagesOnly.")
-        return 2
 
     return process(args)
 
