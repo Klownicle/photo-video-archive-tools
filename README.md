@@ -249,49 +249,29 @@ Always run rename, delete, and metadata operations with `-WhatIf` first.
 
 ## Viewing the HTML help guide
 
-GitHub shows HTML files in the repository as source code when you click them in the normal `github.com` file browser. That is expected.
+GitHub shows HTML files as source code when you click them in the normal repository file browser. That is expected.
 
-To view the help guide as an actual rendered web page, enable GitHub Pages for the repository and publish from the `/docs` folder.
+The rendered help guide is available through GitHub Pages:
 
-Recommended setup:
+[Open the rendered help guide](https://klownicle.github.io/photo-video-archive-tools/)
 
-1. Go to the repository on GitHub.
-2. Open `Settings`.
-3. Open `Pages`.
-4. Under `Build and deployment`, choose `Deploy from a branch`.
-5. Set the branch to `main`.
-6. Set the folder to `/docs`.
-7. Save.
+The repository also includes the GitHub Pages landing file:
 
-After GitHub Pages finishes publishing, the rendered help guide should be available at a URL like:
+[`docs/index.html`](docs/index.html)
 
-```text
-https://YOUR-GITHUB-USERNAME.github.io/photo-video-archive-tools/
-```
+That landing page redirects to the full help guide:
 
-This package includes:
-
-```text
-docs/index.html
-docs/Photo_Video_Archive_Tools_Help.html
-```
-
-The `docs/index.html` file redirects the GitHub Pages root to the full help guide.
-
-If you are only browsing the repository on `github.com`, clicking the HTML file will show code. Use the GitHub Pages URL for the rendered version.
+[`docs/Photo_Video_Archive_Tools_Help.html`](docs/Photo_Video_Archive_Tools_Help.html)
 
 
 ## Full guide
 
-Repository source file:
+[Open the rendered help guide](https://klownicle.github.io/photo-video-archive-tools/)
 
-[`docs/Photo_Video_Archive_Tools_Help.html`](docs/Photo_Video_Archive_Tools_Help.html)
+Source files:
 
-Rendered version after GitHub Pages is enabled:
-
-```text
-https://YOUR-GITHUB-USERNAME.github.io/photo-video-archive-tools/
-```
+- [`docs/index.html`](docs/index.html)
+- [`docs/Photo_Video_Archive_Tools_Help.html`](docs/Photo_Video_Archive_Tools_Help.html)
 
 
 ## License
