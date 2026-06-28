@@ -272,6 +272,27 @@ def normalize_path_for_compare(path: str | Path) -> str:
         return os.path.normcase(str(path))
 
 
+def sidecar_path_for_media(path: Path) -> Path:
+    """Return the sidecar path used by this archive tool: media_file.ext.xmp."""
+    return path.with_name(path.name + ".xmp")
+
+
+def delete_file_path(path: Path, *, permanent: bool) -> tuple[bool, str]:
+    if not path.exists():
+        return True, "Already missing."
+
+    try:
+        if permanent:
+            path.unlink()
+            return True, "Permanently deleted."
+        if not SEND2TRASH_SUPPORT:
+            return False, "send2trash is not installed. Run: pip install send2trash or use -PermanentDelete."
+        send2trash(str(path))  # type: ignore[misc]
+        return True, "Sent to Recycle Bin."
+    except Exception as ex:
+        return False, str(ex)
+
+
 def now_stamp() -> str:
     return dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -347,7 +368,8 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
 def dhash_256(image: Image.Image) -> int:
     grayscale = image.convert("L")
     small = grayscale.resize((17, 16), Image.Resampling.LANCZOS)
-    pixels = list(small.getdata())
+    # Pillow 14 deprecates Image.getdata(); bytes iteration returns integer pixel values.
+    pixels = small.tobytes()
 
     value = 0
     for row in range(16):
@@ -362,7 +384,8 @@ def dhash_256(image: Image.Image) -> int:
 def ahash_256(image: Image.Image) -> int:
     grayscale = image.convert("L")
     small = grayscale.resize((16, 16), Image.Resampling.LANCZOS)
-    pixels = list(small.getdata())
+    # Pillow 14 deprecates Image.getdata(); bytes iteration returns integer pixel values.
+    pixels = small.tobytes()
     avg = sum(pixels) / len(pixels)
 
     value = 0
@@ -520,6 +543,88 @@ def cache_lookup(conn: sqlite3.Connection, path: Path, include_exact_hash: bool)
     )
 
 
+
+def build_filename_cache_index(conn: sqlite3.Connection) -> dict[str, list[tuple[Any, ...]]]:
+    """
+    Build an in-memory filename lookup once, instead of doing one SQLite scan per file.
+
+    The v3 filename fallback used `WHERE lower(file_name) = lower(?)` for every file.
+    Without a matching SQLite index, that can full-scan the cache table thousands of
+    times. This index turns filename fallback into an O(1) dictionary lookup per file.
+    """
+    rows = conn.execute(
+        """
+        SELECT full_path, parent_directory, file_name, extension, size_bytes, size_readable,
+               mtime_ns, width, height, megapixels, exact_sha256, dhash_hex, ahash_hex,
+               avg_r, avg_g, avg_b, error, updated_utc
+        FROM image_cache
+        ORDER BY updated_utc DESC, full_path ASC
+        """
+    ).fetchall()
+
+    index: dict[str, list[tuple[Any, ...]]] = {}
+    for row in rows:
+        key = (row[2] or Path(row[0]).name).casefold()
+        index.setdefault(key, []).append(row)
+    return index
+
+
+def cache_lookup_by_filename_only(
+    filename_cache_index: dict[str, list[tuple[Any, ...]]],
+    path: Path,
+) -> tuple[HashResult | None, str, int]:
+    """
+    Filename-only cache fallback used by -IgnoreFullRootComparison.
+
+    This intentionally ignores full path, parent folder, file size, and Date Modified.
+    It looks for the current filename in a prebuilt in-memory cache index and reuses
+    the first/best cached visual hash result it finds. The returned HashResult is
+    rewritten to the CURRENT live path so CSV output and delete processing reference
+    the current archive location, not an old cached root.
+    """
+    candidates = filename_cache_index.get(path.name.casefold()) or []
+    candidate_count = len(candidates)
+
+    if not candidates:
+        return None, "", 0
+
+    row = candidates[0]
+
+    try:
+        stat = path.stat()
+        current_size = int(stat.st_size)
+        current_mtime = int(stat.st_mtime_ns)
+    except OSError:
+        current_size = int(row[4])
+        current_mtime = int(row[6])
+
+    cached_full_path = row[0] or ""
+    error = row[16] or ""
+
+    result = HashResult(
+        ok=(error == ""),
+        full_path=str(path),
+        parent_directory=str(path.parent),
+        file_name=path.name,
+        extension=path.suffix.lower(),
+        size_bytes=current_size,
+        size_readable=readable_size(current_size),
+        mtime_ns=current_mtime,
+        width=int(row[7]),
+        height=int(row[8]),
+        megapixels=float(row[9]),
+        exact_sha256=row[10] or "",
+        dhash_hex=row[11] or "",
+        ahash_hex=row[12] or "",
+        avg_r=int(row[13]),
+        avg_g=int(row[14]),
+        avg_b=int(row[15]),
+        error=error,
+    )
+
+    return result, cached_full_path, int(candidate_count)
+
+
 def cache_store_many(conn: sqlite3.Connection, results: list[HashResult]) -> None:
     if not results:
         return
@@ -605,32 +710,67 @@ def hash_images_with_cache(
     workers: int,
     include_exact_hash: bool,
     rebuild_cache: bool,
-) -> tuple[list[ImageRecord], list[ErrorRecord], int, int]:
+    ignore_full_root_comparison: bool,
+    cache_debug: int,
+) -> tuple[list[ImageRecord], list[ErrorRecord], int, int, int]:
     conn = connect_cache(cache_db)
-    cache_hits: list[HashResult] = []
+    direct_cache_hits: list[HashResult] = []
+    filename_cache_hits: list[HashResult] = []
     to_hash: list[Path] = []
+    debug_printed = 0
+    filename_cache_index: dict[str, list[tuple[Any, ...]]] = {}
 
     if rebuild_cache:
         to_hash = files
     else:
+        if ignore_full_root_comparison:
+            print("Building filename cache index...")
+            filename_cache_index = build_filename_cache_index(conn)
+            print(f"Filename cache index entries: {sum(len(v) for v in filename_cache_index.values()):,} rows / {len(filename_cache_index):,} unique filenames")
+
         for i, path in enumerate(files, start=1):
             cached = cache_lookup(conn, path, include_exact_hash)
             if cached:
-                cache_hits.append(cached)
+                direct_cache_hits.append(cached)
+                if cache_debug and debug_printed < cache_debug:
+                    print(f"CACHE DIRECT HIT | {path.name} | {path}")
+                    debug_printed += 1
+            elif ignore_full_root_comparison:
+                cached, cached_from, candidate_count = cache_lookup_by_filename_only(filename_cache_index, path)
+                if cached:
+                    filename_cache_hits.append(cached)
+                    if cache_debug and debug_printed < cache_debug:
+                        print(
+                            f"CACHE FILENAME HIT | {path.name} | candidates={candidate_count} | "
+                            f"current={path} | cached_from={cached_from}"
+                        )
+                        debug_printed += 1
+                else:
+                    to_hash.append(path)
+                    if cache_debug and debug_printed < cache_debug:
+                        print(f"CACHE MISS | {path.name} | current={path}")
+                        debug_printed += 1
             else:
                 to_hash.append(path)
+                if cache_debug and debug_printed < cache_debug:
+                    print(f"CACHE MISS | {path.name} | current={path}")
+                    debug_printed += 1
 
             if i == 1 or i % 1000 == 0 or i == len(files):
                 print_progress(
                     "Checking cache",
                     i,
                     len(files),
-                    extra=f"Hits: {len(cache_hits):,} | To hash: {len(to_hash):,}",
+                    extra=(
+                        f"Direct hits: {len(direct_cache_hits):,} | "
+                        f"Filename hits: {len(filename_cache_hits):,} | "
+                        f"To hash: {len(to_hash):,}"
+                    ),
                 )
 
         clear_progress_line()
 
-    results: list[HashResult] = list(cache_hits)
+    results: list[HashResult] = list(direct_cache_hits) + list(filename_cache_hits)
     pending_store: list[HashResult] = []
 
     if to_hash:
@@ -692,7 +832,7 @@ def hash_images_with_cache(
 
     errors.sort(key=lambda e: normalize_path_for_compare(e.full_path))
 
-    return records, errors, len(cache_hits), len(to_hash)
+    return records, errors, len(direct_cache_hits), len(filename_cache_hits), len(to_hash)
 
 
 def aspect_ratio(record: ImageRecord) -> float:
@@ -1138,6 +1278,8 @@ def analyze(args: argparse.Namespace) -> int:
     print(f"Aspect tolerance:      {aspect_tolerance * 100:.3f}%")
     print(f"Color threshold:       {color_threshold}")
     print(f"HEIC/HEIF support:     {'Yes' if HEIF_SUPPORT else 'No'}")
+    print(f"Filename-only cache:   {'Yes' if args.ignore_full_root_comparison else 'No'}")
+    print(f"Cache debug rows:      {int(args.cache_debug)}")
     print("GPU acceleration:      No - CPU/multithreaded hashing is used")
     print("")
 
@@ -1159,17 +1301,20 @@ def analyze(args: argparse.Namespace) -> int:
         print("No supported images found.")
         return 0
 
-    records, errors, cache_hits, hashed_count = hash_images_with_cache(
+    records, errors, direct_cache_hits, filename_cache_hits, hashed_count = hash_images_with_cache(
         files,
         cache_db=cache_db,
         workers=workers,
         include_exact_hash=not args.skip_exact_hash,
         rebuild_cache=args.rebuild_cache,
+        ignore_full_root_comparison=args.ignore_full_root_comparison,
+        cache_debug=int(args.cache_debug),
     )
 
     print(f"Images readable:        {len(records):,}")
     print(f"Read errors:            {len(errors):,}")
-    print(f"Cache hits:             {cache_hits:,}")
+    print(f"Direct cache hits:      {direct_cache_hits:,}")
+    print(f"Filename cache hits:    {filename_cache_hits:,}")
     print(f"Files hashed this run:  {hashed_count:,}")
 
     if not records:
@@ -1214,7 +1359,8 @@ def analyze(args: argparse.Namespace) -> int:
         f"Image files scanned:     {len(files):,}",
         f"Images readable:         {len(records):,}",
         f"Read errors:             {len(errors):,}",
-        f"Cache hits:              {cache_hits:,}",
+        f"Direct cache hits:       {direct_cache_hits:,}",
+        f"Filename cache hits:     {filename_cache_hits:,}",
         f"Files hashed this run:   {hashed_count:,}",
         "",
         f"Similar groups found:    {group_count:,}",
@@ -1332,6 +1478,7 @@ def process_csv(args: argparse.Namespace) -> int:
     print(f"Mode:              {'WHATIF / dry run' if args.whatif else 'LIVE delete'}")
     print(f"CSV:               {csv_path}")
     print(f"Delete method:     {'Permanent delete' if args.permanent_delete else 'Recycle Bin'}")
+    print(f"Delete sidecars:   {'No' if args.no_sidecars else 'Yes'}")
     print(f"Rows in CSV:        {len(rows):,}")
     print(f"Delete candidates:  {len(candidates):,}")
     print(f"Unconfirmed skips:  {skipped_unconfirmed:,}")
@@ -1347,6 +1494,7 @@ def process_csv(args: argparse.Namespace) -> int:
     audit_rows: list[dict[str, Any]] = []
 
     deleted = 0
+    sidecars_deleted = 0
     errors = 0
 
     for i, row in enumerate(candidates, start=1):
@@ -1355,6 +1503,9 @@ def process_csv(args: argparse.Namespace) -> int:
 
         status = ""
         error = ""
+        sidecar_path = sidecar_path_for_media(path)
+        sidecar_status = "SKIPPED" if args.no_sidecars else ""
+        sidecar_error = ""
 
         try:
             if not full_path:
@@ -1376,14 +1527,38 @@ def process_csv(args: argparse.Namespace) -> int:
                 clear_progress_line()
                 print(f"{action} | {path}")
 
-                if not args.whatif:
-                    if args.permanent_delete:
-                        path.unlink()
+                if args.whatif:
+                    status = "WOULD_DELETE"
+                    deleted += 1
+                    if not args.no_sidecars:
+                        if sidecar_path.exists():
+                            sidecar_status = "WOULD_DELETE"
+                            sidecars_deleted += 1
+                            print(f"WHATIF DELETE SIDECAR | {sidecar_path}")
+                        else:
+                            sidecar_status = "NO_SIDECAR"
+                else:
+                    ok_file, msg_file = delete_file_path(path, permanent=bool(args.permanent_delete))
+                    if ok_file:
+                        status = "DELETED"
+                        deleted += 1
                     else:
-                        send2trash(str(path))  # type: ignore[misc]
+                        status = "ERROR"
+                        error = msg_file
+                        errors += 1
 
-                status = "WOULD_DELETE" if args.whatif else "DELETED"
-                deleted += 1
+                    if not args.no_sidecars:
+                        if sidecar_path.exists():
+                            ok_sidecar, msg_sidecar = delete_file_path(sidecar_path, permanent=bool(args.permanent_delete))
+                            if ok_sidecar:
+                                sidecar_status = "DELETED"
+                                sidecars_deleted += 1
+                            else:
+                                sidecar_status = "ERROR"
+                                sidecar_error = msg_sidecar
+                                errors += 1
+                        else:
+                            sidecar_status = "NO_SIDECAR"
 
         except Exception as ex:
             status = "ERROR"
@@ -1397,6 +1572,9 @@ def process_csv(args: argparse.Namespace) -> int:
                 "TimestampUtc": utc_now_text(),
                 "Status": status,
                 "Error": error,
+                "SidecarStatus": sidecar_status,
+                "SidecarError": sidecar_error,
+                "SidecarPath": str(sidecar_path),
                 "GroupId": row.get("GroupId", ""),
                 "FullPath": full_path,
                 "FileName": row.get("FileName", ""),
@@ -1418,6 +1596,9 @@ def process_csv(args: argparse.Namespace) -> int:
             "TimestampUtc",
             "Status",
             "Error",
+            "SidecarStatus",
+            "SidecarError",
+            "SidecarPath",
             "GroupId",
             "FullPath",
             "FileName",
@@ -1433,6 +1614,7 @@ def process_csv(args: argparse.Namespace) -> int:
     print("")
     print("Summary")
     print(f"{'Would delete' if args.whatif else 'Deleted'}: {deleted:,}")
+    print(f"Sidecars {'would delete' if args.whatif else 'deleted'}: {sidecars_deleted:,}")
     print(f"Missing/skipped: {skipped_missing:,}")
     print(f"Errors:          {errors:,}")
     print(f"Audit CSV:       {audit_path}")
@@ -1458,12 +1640,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("-Limit", "--limit", type=int, default=0, help="Process only first N scanned images for testing.")
     parser.add_argument("-MaxPairRows", "--max-pair-rows", type=int, default=500000, help="Maximum pair-detail rows to write.")
     parser.add_argument("-RebuildCache", "--rebuild-cache", action="store_true", help="Ignore existing cache and recalculate all hashes.")
+    parser.add_argument("-IgnoreFullRootComparison", "--ignore-full-root-comparison", action="store_true", help="When the exact full-path cache lookup misses, reuse a cached entry by filename only. Ignores root, parent folders, file size, and Date Modified. Use only when archive filenames are unique/stable.")
+    parser.add_argument("-CacheDebug", "--cache-debug", type=int, default=0, help="Print the first N cache lookup decisions, including filename hits and misses. 0 disables detailed cache debug output.")
     parser.add_argument("-SkipExactHash", "--skip-exact-hash", action="store_true", help="Skip SHA-256 exact duplicate check to reduce disk reads.")
 
     parser.add_argument("-Process", "--process", action="store_true", help="Process confirmed deletes from a review CSV.")
     parser.add_argument("-Csv", "--csv", default="", help="Review CSV to process when using -Process.")
     parser.add_argument("-WhatIf", "--whatif", "--dry-run", action="store_true", help="Preview delete processing without deleting files.")
     parser.add_argument("-PermanentDelete", "--permanent-delete", action="store_true", help="Permanently delete instead of sending to Recycle Bin.")
+    parser.add_argument("-NoSidecars", "--no-sidecars", action="store_true", help="Do not delete media_file.ext.xmp sidecar files when deleting confirmed images.")
     parser.add_argument("-AllowDeleteWholeGroup", "--allow-delete-whole-group", action="store_true", help="Allow deleting every file in a duplicate group.")
 
     return parser

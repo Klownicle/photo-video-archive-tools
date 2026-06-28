@@ -40,9 +40,15 @@ Always run -WhatIf first.
 Recent additions:
   - Image sidecars are now supported and created by default.
   - -ResetExistingTags clears stale folder tags and resets sidecars to the current parent folder.
+  - Video Windows tag fallback writes missing Windows Explorer Tags / System.Keywords by default.
   - -SetWindowsTags writes Windows Explorer Tags / System.Keywords for images and videos where supported.
   - -VideosOnly and -ImagesOnly allow targeted corrective runs.
   - -SkipExifTool skips embedded image ExifTool reads/writes while still allowing sidecar and Windows tag updates on images/videos.
+  - Re-runs skip media files that already have media_file.ext.xmp sidecars by default.
+    Use -Force to intentionally reprocess existing sidecar-backed files during a root scan.
+  - New/unprocessed videos receive a Windows Explorer tag fallback by default because
+    embedded video keyword/tag writes are not handled by ExifTool in this workflow.
+  - -ReprocessReportCsv can backfill actions for rows from a prior corrective report.
 """
 
 from __future__ import annotations
@@ -266,6 +272,10 @@ def sidecar_path_for_file(media_path: Path) -> Path:
 def sidecar_path_for_video(video_path: Path) -> Path:
     # Backwards-compatible helper name used by earlier script versions.
     return sidecar_path_for_file(video_path)
+
+
+def file_has_sidecar(media_path: Path) -> bool:
+    return sidecar_path_for_file(media_path).exists()
 
 
 def scan_files(root: Path, skip_dir_names: set[str], limit: int | None = None) -> list[Path]:
@@ -630,6 +640,23 @@ def sidecars_disabled_for_kind(args: argparse.Namespace, kind: str) -> bool:
     return False
 
 
+def should_include_existing_sidecar_backed_file(args: argparse.Namespace, kind: str) -> bool:
+    """
+    Root-scan reruns use media_file.ext.xmp as the already-processed marker.
+
+    That marker must stay authoritative for normal -Root runs. If a media file
+    already has a sidecar, it is skipped unless -Force is used or the caller
+    uses -ReprocessReportCsv. This keeps reruns fast and prevents explicit
+    maintenance switches such as -SetWindowsTags from unexpectedly touching the
+    entire completed archive.
+
+    Video Windows tag fallback is applied to selected videos during the normal
+    corrective action pass. A new video without a sidecar is selected, gets its
+    sidecar, and gets the Windows parent-folder tag fallback in the same run.
+    """
+    return False
+
+
 def evaluate_sidecar_action(
     args: argparse.Namespace,
     file_path: Path,
@@ -822,6 +849,33 @@ def write_report(report_path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({field: csv_safe(row.get(field, "")) for field in REPORT_FIELDS})
 
 
+def read_reprocess_report_paths(report_csv: Path) -> list[Path]:
+    if not report_csv.exists():
+        raise FileNotFoundError(f"Reprocess report CSV not found: {report_csv}")
+
+    paths: list[Path] = []
+    seen: set[str] = set()
+
+    with report_csv.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames or "FullPath" not in reader.fieldnames:
+            raise ValueError("Reprocess report CSV must contain a FullPath column.")
+
+        for row in reader:
+            full_path = (row.get("FullPath") or "").strip()
+            if not full_path:
+                continue
+
+            path = Path(full_path).expanduser()
+            key = path_key(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(path)
+
+    return paths
+
+
 def base_report_row(
     file_path: Path,
     filename_date: dt.datetime,
@@ -863,17 +917,26 @@ def evaluate_windows_tag_action(
     file_path: Path,
     parent_tag: str,
     tag_allowed: bool,
+    *,
+    force_enabled: bool = False,
+    fallback_append_only: bool = False,
 ) -> dict[str, Any]:
     """
     Determine whether Windows Explorer Tags / System.Keywords should be written.
 
-    -SetWindowsTags applies to both images and videos.
-    Without -AppendWindowsTags, the desired Windows tag list is the current
-    parent-folder tag only.
-    With -AppendWindowsTags, the desired list is existing tags plus the
-    current parent-folder tag, deduplicated.
-    Needs Categorized-style folders are not written as tags. With
-    -ResetExistingTags, existing Windows tags are cleared for those staging folders.
+    -SetWindowsTags applies to images and videos when explicitly requested.
+    Video fallback can also enable this function for videos during the standard
+    corrective pass because embedded video keyword writes are not handled by
+    ExifTool in this workflow.
+
+    Explicit -SetWindowsTags keeps its documented behavior:
+      - replace tags unless -AppendWindowsTags is used
+      - with -AppendWindowsTags, preserve existing tags and add parent tag
+
+    Video fallback behavior is safer by default:
+      - add the parent-folder tag only if it is missing
+      - do not clear or replace existing video Windows tags unless
+        -ResetExistingTags is also used
     """
     existing_windows_tags: list[str] = []
     windows_read_message = ""
@@ -881,7 +944,8 @@ def evaluate_windows_tag_action(
     windows_tag_action = "NO_CHANGE"
     desired_windows_tags: list[str] = []
 
-    if not args.set_windows_tags:
+    enabled = bool(args.set_windows_tags) or bool(force_enabled)
+    if not enabled:
         return {
             "existing": existing_windows_tags,
             "read_message": windows_read_message,
@@ -893,17 +957,37 @@ def evaluate_windows_tag_action(
     existing_windows_tags, windows_read_message = get_windows_keywords(file_path)
 
     if tag_allowed:
-        if args.append_windows_tags:
+        existing_norms = {normalize_tag(t) for t in existing_windows_tags}
+        parent_norm = normalize_tag(parent_tag)
+
+        if bool(args.set_windows_tags):
+            if args.append_windows_tags:
+                desired_windows_tags = unique_tag_list(existing_windows_tags + [parent_tag])
+                windows_tag_action = "APPEND_WINDOWS_PARENT_FOLDER_TAG"
+            else:
+                desired_windows_tags = unique_tag_list([parent_tag])
+                windows_tag_action = "SET_WINDOWS_TAGS_TO_PARENT_FOLDER"
+
+            windows_tag_needed = (
+                bool(args.reset_existing_tags)
+                or not windows_tag_lists_equal(existing_windows_tags, desired_windows_tags)
+            )
+
+        elif fallback_append_only:
             desired_windows_tags = unique_tag_list(existing_windows_tags + [parent_tag])
-            windows_tag_action = "APPEND_WINDOWS_PARENT_FOLDER_TAG"
+            windows_tag_action = "ADD_VIDEO_WINDOWS_PARENT_FOLDER_TAG_FALLBACK"
+            windows_tag_needed = (
+                bool(args.reset_existing_tags)
+                or (bool(parent_norm) and parent_norm not in existing_norms)
+            )
+
         else:
             desired_windows_tags = unique_tag_list([parent_tag])
             windows_tag_action = "SET_WINDOWS_TAGS_TO_PARENT_FOLDER"
-
-        windows_tag_needed = (
-            bool(args.reset_existing_tags)
-            or not windows_tag_lists_equal(existing_windows_tags, desired_windows_tags)
-        )
+            windows_tag_needed = (
+                bool(args.reset_existing_tags)
+                or not windows_tag_lists_equal(existing_windows_tags, desired_windows_tags)
+            )
 
     elif not args.no_parent_tag and args.reset_existing_tags and existing_windows_tags:
         desired_windows_tags = []
@@ -1171,6 +1255,8 @@ def process_video_file(
         file_path=file_path,
         parent_tag=parent_tag,
         tag_allowed=tag_allowed,
+        force_enabled=not bool(args.no_video_windows_tag_fallback),
+        fallback_append_only=not bool(args.set_windows_tags),
     )
     existing_windows_tags = list(windows["existing"])
     windows_read_message = str(windows["read_message"])
@@ -1299,10 +1385,15 @@ def process_video_file(
 
 
 def process(args: argparse.Namespace) -> int:
+    reprocess_report_csv = Path(args.reprocess_report_csv).expanduser().resolve() if args.reprocess_report_csv else None
     root = Path(args.root).expanduser().resolve()
     exiftool = Path(args.exiftool).expanduser()
 
-    if not root.exists():
+    if reprocess_report_csv:
+        if not reprocess_report_csv.exists():
+            print(f"ERROR: Reprocess report CSV does not exist: {reprocess_report_csv}")
+            return 2
+    elif not root.exists():
         print(f"ERROR: Root folder does not exist: {root}")
         return 2
 
@@ -1313,7 +1404,12 @@ def process(args: argparse.Namespace) -> int:
         print(f"ERROR: ExifTool not found: {exiftool}")
         return 2
 
-    output_folder = Path(args.output_folder).expanduser().resolve() if args.output_folder else root
+    if args.output_folder:
+        output_folder = Path(args.output_folder).expanduser().resolve()
+    elif reprocess_report_csv:
+        output_folder = reprocess_report_csv.parent
+    else:
+        output_folder = root
     report_path = Path(args.report_csv).expanduser().resolve() if args.report_csv else output_folder / f"{now_stamp()}_corrective_image_video_metadata_report.csv"
 
     skip_dir_names = set(DEFAULT_SKIP_DIR_NAMES)
@@ -1323,7 +1419,9 @@ def process(args: argparse.Namespace) -> int:
 
     print("Correct Image/Video Metadata From Filename")
     print(f"Mode:                       {'WHATIF / dry run' if args.whatif else 'LIVE'}")
-    print(f"Root:                       {root}")
+    print(f"Root:                       {root if not reprocess_report_csv else 'Not used - reprocessing prior report CSV'}")
+    if reprocess_report_csv:
+        print(f"Reprocess report CSV:       {reprocess_report_csv}")
     if args.skip_exiftool:
         exiftool_display = "Skipped by -SkipExifTool"
     elif needs_exiftool:
@@ -1342,20 +1440,103 @@ def process(args: argparse.Namespace) -> int:
     print(f"Reset existing tags:        {'Yes' if args.reset_existing_tags else 'No'}")
     print(f"Windows Explorer tags:      {'Yes' if args.set_windows_tags else 'No'}")
     print(f"Windows tag mode:           {'Append' if args.append_windows_tags else 'Replace'}")
+    print(f"Video Windows tag fallback: {'No' if args.no_video_windows_tag_fallback else 'Yes - selected videos get missing parent-folder tag'}")
     print(f"Sidecars:                   {'No' if args.no_sidecars else 'Yes'}")
     print(f"Image sidecars:             {'No' if args.no_sidecars or args.no_image_sidecars else 'Yes'}")
     print(f"Video sidecars:             {'No' if args.no_sidecars or args.no_video_sidecars else 'Yes'}")
     print(f"Update existing sidecars:   {'Yes' if args.update_existing_sidecars else 'No'}")
+    print(f"Force existing sidecars:    {'Yes' if args.force else 'No'}")
     print()
 
-    print("Scanning for renamed image/video files...")
-    limit = int(args.limit) if args.limit else None
-    files = scan_files(root, skip_dir_names=skip_dir_names, limit=limit)
+    if (args.update_existing_sidecars or args.reset_existing_tags) and not args.force and not reprocess_report_csv:
+        print("WARNING: Existing sidecar-backed files are skipped by default.")
+        print("         Use -Force with -UpdateExistingSidecars or -ResetExistingTags to reprocess them.")
+        print()
 
-    if args.images_only:
-        files = [p for p in files if parse_filename_date(p.name)[1] == "IMG"]
-    elif args.videos_only:
-        files = [p for p in files if parse_filename_date(p.name)[1] == "VID"]
+    if args.set_windows_tags and not args.force and not reprocess_report_csv:
+        print("WARNING: -SetWindowsTags only applies to files selected for processing.")
+        print("         Existing sidecar-backed files are skipped during normal -Root reruns.")
+        print("         Use -Force to apply Windows tag maintenance to existing sidecar-backed files,")
+        print("         or use -ReprocessReportCsv to backfill a prior corrective report.")
+        print()
+
+    skipped_existing_sidecar_files: list[Path] = []
+    included_existing_sidecar_for_windows_tag_check: list[Path] = []
+
+    if reprocess_report_csv:
+        print("Loading renamed image/video files from prior report CSV...")
+        try:
+            files = read_reprocess_report_paths(reprocess_report_csv)
+        except Exception as ex:
+            print(f"ERROR: {ex}")
+            return 2
+
+        # Keep only existing, renamed, supported media rows from the prior report.
+        valid_files: list[Path] = []
+        missing_from_report = 0
+        unsupported_from_report = 0
+        limit = int(args.limit) if args.limit else None
+        for file_path in files:
+            if not file_path.exists():
+                missing_from_report += 1
+                continue
+            filename_date, kind, ext = parse_filename_date(file_path.name)
+            if not filename_date:
+                unsupported_from_report += 1
+                continue
+            if kind == "IMG" and ext in SUPPORTED_IMAGE_EXTENSIONS:
+                valid_files.append(file_path)
+            elif kind == "VID" and ext in SUPPORTED_VIDEO_EXTENSIONS:
+                valid_files.append(file_path)
+            else:
+                unsupported_from_report += 1
+            if limit and len(valid_files) >= limit:
+                break
+        files = valid_files
+
+        if args.images_only:
+            files = [p for p in files if parse_filename_date(p.name)[1] == "IMG"]
+        elif args.videos_only:
+            files = [p for p in files if parse_filename_date(p.name)[1] == "VID"]
+
+        total_matching_files = len(files)
+        print(f"Report rows selected:                  {total_matching_files}")
+        print(f"Report rows missing on disk skipped:   {missing_from_report}")
+        print(f"Report rows unsupported skipped:       {unsupported_from_report}")
+        print("Existing sidecar-backed files skipped: 0")
+        print("Existing sidecar-backed files included for Windows tag check: 0")
+        print(f"Files selected for processing:         {len(files)}")
+
+    else:
+        print("Scanning for renamed image/video files...")
+        limit = int(args.limit) if args.limit else None
+        files = scan_files(root, skip_dir_names=skip_dir_names, limit=limit)
+
+        if args.images_only:
+            files = [p for p in files if parse_filename_date(p.name)[1] == "IMG"]
+        elif args.videos_only:
+            files = [p for p in files if parse_filename_date(p.name)[1] == "VID"]
+
+        total_matching_files = len(files)
+
+        if not args.force:
+            process_files: list[Path] = []
+            for file_path in files:
+                filename_date, kind, ext = parse_filename_date(file_path.name)
+                if file_has_sidecar(file_path):
+                    if should_include_existing_sidecar_backed_file(args, kind):
+                        included_existing_sidecar_for_windows_tag_check.append(file_path)
+                        process_files.append(file_path)
+                    else:
+                        skipped_existing_sidecar_files.append(file_path)
+                else:
+                    process_files.append(file_path)
+            files = process_files
+
+        print(f"Renamed supported files matched:       {total_matching_files}")
+        print(f"Existing sidecar-backed files skipped: {len(skipped_existing_sidecar_files)}")
+        print(f"Existing sidecar-backed files included for Windows tag check: {len(included_existing_sidecar_for_windows_tag_check)}")
+        print(f"Files selected for processing:         {len(files)}")
 
     image_files: list[Path] = []
     video_files: list[Path] = []
@@ -1393,7 +1574,10 @@ def process(args: argparse.Namespace) -> int:
     report_rows: list[dict[str, Any]] = []
 
     stats = {
+        "files_matched": total_matching_files,
         "files_scanned": len(files),
+        "skipped_existing_sidecar": len(skipped_existing_sidecar_files),
+        "included_existing_sidecar_for_windows_tag_check": len(included_existing_sidecar_for_windows_tag_check),
         "image_files": len(image_files),
         "video_files": len(video_files),
         "would_update": 0,
@@ -1464,9 +1648,12 @@ def process(args: argparse.Namespace) -> int:
 
     print()
     print("Done.")
-    print(f"Files scanned:                  {stats['files_scanned']}")
-    print(f"Image files:                    {stats['image_files']}")
-    print(f"Video files:                    {stats['video_files']}")
+    print(f"Renamed files matched:          {stats['files_matched']}")
+    print(f"Existing sidecars skipped:      {stats['skipped_existing_sidecar']}")
+    print(f"Existing sidecars included for Windows tag check: {stats['included_existing_sidecar_for_windows_tag_check']}")
+    print(f"Files processed/evaluated:      {stats['files_scanned']}")
+    print(f"Image files processed:          {stats['image_files']}")
+    print(f"Video files processed:          {stats['video_files']}")
     print(f"Parent tags skipped - Needs:    {stats['tag_skipped_needs']}")
     if args.whatif:
         print(f"Files that would be updated:    {stats['would_update']}")
@@ -1494,12 +1681,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-ExifTool", "--exiftool", default=DEFAULT_EXIFTOOL, help="Path to exiftool.exe.")
     parser.add_argument("-SkipExifTool", "--skip-exiftool", action="store_true", help="Skip ExifTool entirely. Embedded image Date Taken / image keyword writes are skipped, but image/video sidecars and Windows tag updates can still be processed.")
     parser.add_argument("-OutputFolder", "--output-folder", default="", help="Folder for the report CSV. Defaults to root.")
-    parser.add_argument("-ReportCsv", "--report-csv", default="", help="Explicit report CSV path.")
+    parser.add_argument("-ReportCsv", "--report-csv", default="", help="Explicit output report CSV path.")
+    parser.add_argument("-ReprocessReportCsv", "--reprocess-report-csv", default="", help="Reprocess only media rows listed in a prior corrective report CSV. This bypasses the normal root scan and existing-sidecar skip for those listed rows. Useful for backfilling newly-added actions, such as video Windows tag fallback, without scanning the whole root.")
     parser.add_argument("-BatchSize", "--batch-size", type=int, default=100, help="Image metadata read batch size.")
     parser.add_argument("-Limit", "--limit", type=int, default=0, help="Limit number of matching files for testing. 0 means no limit.")
     parser.add_argument("-ImagesOnly", "--images-only", action="store_true", help="Process only renamed image files.")
     parser.add_argument("-VideosOnly", "--videos-only", action="store_true", help="Process only renamed video files. ExifTool is not required in this mode.")
     parser.add_argument("-WhatIf", "--whatif", action="store_true", help="Dry run. Do not write embedded image metadata, image/video sidecars, or Windows Explorer tags.")
+    parser.add_argument("-Force", "--force", action="store_true", help="Reprocess files even when media_file.ext.xmp already exists. Without -Force, existing sidecar-backed files are treated as already processed and skipped.")
 
     parser.add_argument("-OverwriteExistingDateTaken", "--overwrite-existing-date-taken", action="store_true", help="Overwrite image DateTimeOriginal even when it already exists.")
     parser.add_argument("-NoDateTaken", "--no-date-taken", action="store_true", help="Do not update image Date Taken or image/video sidecar date fields.")
@@ -1507,6 +1696,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-ResetExistingTags", "--reset-existing-tags", action="store_true", help="Clear existing embedded image tag fields and reset them to the current parent-folder tag. Also rewrites existing image/video sidecars with current tag/date values.")
     parser.add_argument("-SetWindowsTags", "--set-windows-tags", action="store_true", help="Set Windows Explorer Tags / System.Keywords to the current parent-folder tag for supported images and videos. Requires pywin32.")
     parser.add_argument("-AppendWindowsTags", "--append-windows-tags", action="store_true", help="Append the parent-folder tag to existing Windows Explorer tags instead of replacing them. Used with -SetWindowsTags.")
+    parser.add_argument("-NoVideoWindowsTagFallback", "--no-video-windows-tag-fallback", action="store_true", help="Disable the default video fallback that adds the parent-folder tag to Windows Explorer Tags / System.Keywords when it is missing.")
     parser.add_argument("-NoSidecars", "--no-sidecars", action="store_true", help="Do not create/update any image or video XMP sidecars.")
     parser.add_argument("-NoImageSidecars", "--no-image-sidecars", action="store_true", help="Do not create/update image XMP sidecars.")
     parser.add_argument("-NoVideoSidecars", "--no-video-sidecars", action="store_true", help="Do not create/update video XMP sidecars.")

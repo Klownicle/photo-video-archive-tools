@@ -33,6 +33,9 @@ The tools are meant to help with:
 - finding image/video duplicates and near-duplicates
 - visually reviewing duplicate groups before deleting anything
 - processing only explicitly confirmed delete rows
+- deleting matching XMP sidecars when confirmed duplicate media is deleted
+- removing orphaned XMP sidecars after cleanup
+- reusing duplicate caches after a root/path rename with an optional filename-only cache fallback
 - creating/updating image and video XMP sidecars
 - correcting image metadata and folder-based tags
 - optionally writing Windows Explorer tags for images/videos where supported
@@ -81,6 +84,7 @@ The image workflow uses:
 - average color distance checks
 - BK-tree indexing so searches are not just a giant slow compare-everything-to-everything loop
 - SQLite caching so future runs do not re-hash unchanged images
+- optional filename-only cache fallback for archive root/path changes
 
 The suggested image keeper generally favors:
 
@@ -108,6 +112,8 @@ The video finder uses FFprobe and FFmpeg to compare the actual video content:
 - Date Modified is used only as a weak audit/helper signal
 - estimated bitrate is used as a quality/preservation signal
 - SQLite caching avoids re-sampling unchanged videos every run
+- optional filename-only cache fallback can reuse old cache rows after a root/path rename
+- `-Workers` can parallelize video cache misses, but use lower values than image hashing because each worker can launch FFmpeg/FFprobe
 
 This was useful for videos that were exported, compressed, re-encoded, resized, or renamed but were still basically the same clip.
 
@@ -128,6 +134,68 @@ The current video keeper preference is roughly:
 
 The reviewer can also override the suggested keeper without rerunning the expensive video analysis. For example, if the suggested keeper is still sitting in a temporary `Needs Categorized` folder, but an equal-or-better copy exists in a real album folder, the reviewer can suggest keeping the better placed file instead.
 
+
+## Cache reuse after archive root or folder changes
+
+Both duplicate finders normally use strict cache validation so stale cache rows are not reused accidentally. A normal direct cache hit uses the current full path plus the script's normal validation rules.
+
+If the archive root was renamed or moved, the full paths stored in the SQLite cache may no longer match. Use this optional fallback only when your archive filenames are stable and unique:
+
+```powershell
+python .\Find-SimilarImages-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -IgnoreFullRootComparison `
+  -Workers 16
+
+python .\Find-SimilarVideos-ReviewDelete.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -IgnoreFullRootComparison `
+  -Workers 3
+```
+
+`-IgnoreFullRootComparison` still tries the direct full-path cache lookup first. If that misses, it falls back to a filename-only cache lookup. In that fallback mode it intentionally ignores the old root path, parent folders, file size, and Date Modified. The current live file path is still written to the new reports.
+
+This is useful after a root-folder rename such as:
+
+```text
+D:\Old Archive Root\2023-08-20_0000000001_IMG.jpg
+D:\MediaArchive\Photos and Videos\2023-08-20_0000000001_IMG.jpg
+```
+
+Do not use this switch on archives where the same filename can represent different media files in different folders.
+
+For troubleshooting cache behavior, add:
+
+```powershell
+-CacheDebug 25
+```
+
+That prints the first cache decisions so you can confirm whether hits are direct hits, filename fallback hits, or misses. Do not use `-RebuildCache` unless you intentionally want to re-hash or re-sample everything.
+
+## Duplicate processing and XMP sidecars
+
+The image and video duplicate processors send confirmed deletes to the Recycle Bin by default. They also delete the matching XMP sidecar by default:
+
+```text
+media_file.ext
+media_file.ext.xmp
+```
+
+Use `-NoSidecars` only when you intentionally want to delete the media file but leave the sidecar behind.
+
+If you already deleted media before sidecar cleanup existed, use the orphan cleanup helper:
+
+```powershell
+.\Remove-OrphanedXmpSidecars.ps1 `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -WhatIf
+
+.\Remove-OrphanedXmpSidecars.ps1 `
+  -Root "D:\MediaArchive\Photos and Videos"
+```
+
+The orphan cleanup script looks for `media_file.ext.xmp` sidecars where `media_file.ext` no longer exists, writes a report, and sends orphaned sidecars to the Recycle Bin by default.
+
 ## Included files
 
 - `Rename-PhotosVideos-ExifTool.py`
@@ -136,6 +204,7 @@ The reviewer can also override the suggested keeper without rerunning the expens
 - `Find-SimilarVideos-ReviewDelete.py`
 - `Review-SimilarFiles.py`
 - `Install-FFmpeg-ForArchiveTool.ps1`
+- `Remove-OrphanedXmpSidecars.ps1`
 - `requirements.txt`
 - `docs/Photo_Video_Archive_Tools_Help.html`
 
@@ -218,9 +287,11 @@ It can:
 - set missing image Date Taken from the archive filename
 - create image XMP sidecars
 - create video XMP sidecars
-- update existing image/video sidecars
+- update existing image/video sidecars when explicitly forced
 - write the current parent-folder name as the folder tag
 - optionally write Windows Explorer Tags / `System.Keywords` for images and videos
+- automatically apply a Windows Explorer tag fallback for selected video files because embedded video keyword writes are not handled by ExifTool in this workflow
+- reprocess rows from a prior corrective report with `-ReprocessReportCsv`
 - skip ExifTool when you only want sidecars and/or Windows Tags
 
 The sidecar naming format is:
@@ -239,41 +310,78 @@ Examples:
 2022-04-09_0000000002_VID.mp4.xmp
 ```
 
-The sidecars include date-taken style fields and the parent-folder tag using fields intended to be readable by tools like Immich, Lightroom/digiKam-style tag readers, and other XMP-aware tools.
+The normal rerun behavior is intentionally conservative: media files that already have `media_file.ext.xmp` are treated as already processed and skipped. This prevents a full `-Root` rerun from forcing ExifTool to read/write the whole archive when you only added a new batch of files.
 
-Useful modes:
+Normal rerun after adding new files:
 
 ```powershell
-# Create missing image/video sidecars without doing embedded image metadata reads/writes
 python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
-  -SkipExifTool `
   -WhatIf
 
-# Create/update image sidecars only
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos"
+```
+
+That processes renamed image/video files that do not already have a sidecar. For new images, it can create the sidecar, add the parent-folder tag, and set embedded Date Taken only if it is missing. For new videos, it creates the sidecar with the filename date and parent-folder tag, and it also attempts to add the parent-folder tag to the video file's Windows Explorer Tags / `System.Keywords` field. This video Windows tag fallback is part of the normal selected-video processing path because ExifTool is not used for embedded video keyword/tag writes in this workflow.
+
+By default, embedded image writes preserve the filesystem Date Modified timestamp. Use `-UpdateFileModifiedTime` only if you intentionally want ExifTool writes to update the filesystem modified time.
+
+Use `-Force` when you intentionally want to reprocess sidecar-backed files:
+
+```powershell
+# Re-evaluate existing sidecar-backed files
 python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
-  -ImagesOnly `
-  -SkipExifTool `
+  -Force `
+  -WhatIf
+
+# Rewrite existing sidecars after folder/tag changes
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -Force `
   -UpdateExistingSidecars `
   -WhatIf
 
-# Create/update video sidecars only
+# Full reset pass after major reorganization
 python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
+  -Force `
+  -ResetExistingTags `
+  -WhatIf
+```
+
+Use `-ReprocessReportCsv` when you want to apply a newly added corrective action to the exact files listed in a prior corrective report. This bypasses the normal root scan and the existing-sidecar skip for those report rows. It is useful when an older run already created sidecars but missed a later-added action such as video Windows tag fallback:
+
+```powershell
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -ReprocessReportCsv "D:\MediaArchive\Photos and Videos\20260628_020418_corrective_image_video_metadata_report.csv" `
   -VideosOnly `
-  -SkipExifTool `
-  -UpdateExistingSidecars `
   -WhatIf
 
-# Sidecars plus Windows Explorer tags for images/videos
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -ReprocessReportCsv "D:\MediaArchive\Photos and Videos\20260628_020418_corrective_image_video_metadata_report.csv" `
+  -VideosOnly
+```
+
+Useful targeted modes:
+
+```powershell
+# Create missing sidecars without embedded image ExifTool reads/writes
+python .\Correct-ImageVideoMetadataFromFilename.py `
+  -Root "D:\MediaArchive\Photos and Videos" `
+  -SkipExifTool `
+  -WhatIf
+
+# Sidecars plus Windows Explorer tags for only new/unprocessed files
 python .\Correct-ImageVideoMetadataFromFilename.py `
   -Root "D:\MediaArchive\Photos and Videos" `
   -SkipExifTool `
   -SetWindowsTags `
-  -UpdateExistingSidecars `
   -WhatIf
 ```
+
+`-SetWindowsTags` applies to files selected for processing. During a normal `-Root` rerun, existing sidecar-backed files are still skipped unless `-Force` is used. This is intentional so a tag-only maintenance command does not unexpectedly touch the completed archive.
 
 Remove `-WhatIf` only after the report looks right.
 
@@ -285,8 +393,9 @@ Remove `-WhatIf` only after the report looks right.
 3. Use CatchUp only after undated files are in meaningful folders.
 4. Find duplicate images/videos.
 5. Review duplicate groups in `Review-SimilarFiles.py`.
-6. Process confirmed deletes with `-WhatIf` first.
-7. Run the corrective metadata/tag/sidecar pass after the folder structure is stable.
+6. Process confirmed deletes with `-WhatIf` first. Matching XMP sidecars are removed by default.
+7. Run orphaned XMP cleanup if older deletes left sidecars behind.
+8. Run the corrective metadata/tag/sidecar pass after the folder structure is stable. Use the default rerun for new files, or `-Force` for intentional full reprocessing.
 
 ## Safety rule
 
@@ -297,7 +406,7 @@ SuggestedAction = DELETE
 ConfirmDelete = CONFIRM
 ```
 
-Always run rename, delete, and metadata operations with `-WhatIf` first.
+Always run rename, delete, sidecar cleanup, and metadata operations with `-WhatIf` first.
 
 Also: do not run this against your only copy of anything important. Test on a copied folder first.
 

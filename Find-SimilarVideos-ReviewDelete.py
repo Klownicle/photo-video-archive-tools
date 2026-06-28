@@ -64,6 +64,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import datetime as dt
 import io
@@ -75,6 +76,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -290,6 +292,19 @@ def sidecar_path_for_video(path: Path) -> Path:
     return path.with_name(path.name + ".xmp")
 
 
+def sidecar_candidates_for_video(video_path: Path, csv_sidecar_text: str = "") -> list[Path]:
+    """Return possible sidecar paths, preferring the CSV value but falling back to current media_file.ext.xmp."""
+    candidates: list[Path] = []
+    if csv_sidecar_text.strip():
+        candidates.append(Path(csv_sidecar_text.strip()))
+
+    current = sidecar_path_for_video(video_path)
+    if not any(normalize_path_for_compare(p) == normalize_path_for_compare(current) for p in candidates):
+        candidates.append(current)
+
+    return candidates
+
+
 def parse_sample_points(value: str) -> list[float]:
     points: list[float] = []
     for part in (value or "").split(","):
@@ -472,6 +487,93 @@ def get_cache(
         status=str(status),
         message=str(message),
     )
+
+
+def cached_path_filename(path_text: str) -> str:
+    """Return basename from either Windows or POSIX-style cached paths."""
+    return re.split(r"[\\/]", path_text or "")[-1].casefold()
+
+
+def build_filename_cache_index(
+    conn: sqlite3.Connection,
+    sample_points_key: str,
+) -> dict[str, list[tuple[Any, ...]]]:
+    """
+    Build an in-memory filename lookup once, instead of doing one SQLite LIKE scan per file.
+
+    Video cache rows do not have a separate file_name column, and v3 used suffix LIKE
+    queries against path for every file. Since LIKE '%\filename' cannot use a normal
+    index, that can full-scan the video cache thousands of times. This index loads the
+    cache once and turns filename fallback into an O(1) dictionary lookup per file.
+    """
+    rows = conn.execute(
+        """
+        SELECT path, duration, width, height, frame_hashes_json, frame_errors, status, message,
+               sample_points, hash_version, updated_utc
+        FROM video_cache
+        ORDER BY
+            CASE WHEN sample_points = ? AND hash_version = ? THEN 0 ELSE 1 END,
+            updated_utc DESC,
+            path ASC
+        """,
+        (sample_points_key, HASH_VERSION),
+    ).fetchall()
+
+    index: dict[str, list[tuple[Any, ...]]] = {}
+    for row in rows:
+        key = cached_path_filename(row[0] or "")
+        if key:
+            index.setdefault(key, []).append(row)
+    return index
+
+
+def get_cache_by_filename_only(
+    filename_cache_index: dict[str, list[tuple[Any, ...]]],
+    path: Path,
+    size: int,
+    mtime_ns: int,
+    sample_points_key: str,
+) -> tuple[VideoInfo | None, str, int]:
+    """
+    Filename-only cache fallback used by -IgnoreFullRootComparison.
+
+    This intentionally ignores full path, parent folder, file size, and Date Modified.
+    It looks for the current filename in a prebuilt in-memory cache index and reuses
+    the first/best cached FFprobe/frame-hash result it finds. The returned VideoInfo
+    is rewritten to the CURRENT live path so CSV output and delete processing reference
+    the current archive location, not an old cached root.
+    """
+    candidates = filename_cache_index.get(path.name.casefold()) or []
+    candidate_count = len(candidates)
+
+    if not candidates:
+        return None, "", 0
+
+    row = candidates[0]
+
+    cached_path, duration, width, height, hashes_json, frame_errors, status, message, _cached_points, _cached_version, _updated_utc = row
+    try:
+        frame_hashes = [int(x) for x in json.loads(hashes_json)]
+    except Exception:
+        frame_hashes = []
+
+    date_from_name, sequence_from_name = parse_archive_video_name(path)
+    info = VideoInfo(
+        path=path,
+        size=size,
+        mtime_ns=mtime_ns,
+        duration=float(duration),
+        width=int(width),
+        height=int(height),
+        frame_hashes=frame_hashes,
+        frame_errors=int(frame_errors),
+        date_from_name=date_from_name,
+        sequence_from_name=sequence_from_name,
+        status=str(status),
+        message=str(message),
+    )
+
+    return info, str(cached_path or ""), int(candidate_count)
 
 
 def set_cache(
@@ -693,42 +795,187 @@ def load_or_analyze_videos(
     ffmpeg_timeout: int,
     ffprobe_timeout: int,
     rebuild_cache: bool,
+    ignore_full_root_comparison: bool,
+    workers: int,
+    cache_debug: int,
 ) -> list[VideoInfo]:
     conn = init_cache(cache_db)
     sample_points_key = ",".join(f"{p:.4f}" for p in sample_points)
 
-    infos: list[VideoInfo] = []
+    infos_by_index: dict[int, VideoInfo] = {}
+    to_analyze: list[tuple[int, Path]] = []
+    direct_hits = 0
+    filename_hits = 0
+    debug_printed = 0
+    filename_cache_index: dict[str, list[tuple[Any, ...]]] = {}
+
     try:
-        for index, path in enumerate(paths, start=1):
-            size = file_size(path)
-            mtime_ns = file_mtime_ns(path)
+        if rebuild_cache:
+            to_analyze = list(enumerate(paths))
+        else:
+            if ignore_full_root_comparison:
+                print("Building video filename cache index...")
+                filename_cache_index = build_filename_cache_index(conn, sample_points_key)
+                print(f"Video filename cache index entries: {sum(len(v) for v in filename_cache_index.values()):,} rows / {len(filename_cache_index):,} unique filenames")
 
-            info = None
-            if not rebuild_cache:
+            for index, path in enumerate(paths):
+                size = file_size(path)
+                mtime_ns = file_mtime_ns(path)
+
                 info = get_cache(conn, path, size, mtime_ns, sample_points_key)
+                if info is not None:
+                    infos_by_index[index] = info
+                    direct_hits += 1
+                    if cache_debug and debug_printed < cache_debug:
+                        print(f"CACHE DIRECT HIT | {path.name} | {path}")
+                        debug_printed += 1
+                elif ignore_full_root_comparison:
+                    info, cached_from, candidate_count = get_cache_by_filename_only(
+                        filename_cache_index, path, size, mtime_ns, sample_points_key
+                    )
+                    if info is not None:
+                        infos_by_index[index] = info
+                        filename_hits += 1
+                        if cache_debug and debug_printed < cache_debug:
+                            print(
+                                f"CACHE FILENAME HIT | {path.name} | candidates={candidate_count} | "
+                                f"current={path} | cached_from={cached_from}"
+                            )
+                            debug_printed += 1
+                    else:
+                        to_analyze.append((index, path))
+                        if cache_debug and debug_printed < cache_debug:
+                            print(f"CACHE MISS | {path.name} | current={path}")
+                            debug_printed += 1
+                else:
+                    to_analyze.append((index, path))
+                    if cache_debug and debug_printed < cache_debug:
+                        print(f"CACHE MISS | {path.name} | current={path}")
+                        debug_printed += 1
 
-            if info is None:
-                info = analyze_one_video(
+                if index == 0 or (index + 1) % 1000 == 0 or (index + 1) == len(paths):
+                    print_progress(
+                        "Checking video cache",
+                        index + 1,
+                        len(paths),
+                    )
+                    print(
+                        f" | Direct hits: {direct_hits:,} | Filename hits: {filename_hits:,} | To analyze: {len(to_analyze):,}",
+                        end="",
+                        flush=True,
+                    )
+
+            clear_progress_line()
+
+        if to_analyze:
+            workers = max(1, int(workers or 1))
+            done = 0
+            last_commit = 0
+            start_time = time.time()
+
+            def make_error_info(path: Path, message: str) -> VideoInfo:
+                date_from_name, sequence_from_name = parse_archive_video_name(path)
+                return VideoInfo(
                     path=path,
-                    ffmpeg=ffmpeg,
-                    ffprobe=ffprobe,
-                    sample_points=sample_points,
-                    ffmpeg_timeout=ffmpeg_timeout,
-                    ffprobe_timeout=ffprobe_timeout,
+                    size=file_size(path),
+                    mtime_ns=file_mtime_ns(path),
+                    duration=0.0,
+                    width=0,
+                    height=0,
+                    frame_hashes=[],
+                    frame_errors=len(sample_points),
+                    date_from_name=date_from_name,
+                    sequence_from_name=sequence_from_name,
+                    status="ERROR_ANALYZE",
+                    message=message,
                 )
-                set_cache(conn, info, sample_points_key)
-                if index % 25 == 0:
-                    conn.commit()
 
-            infos.append(info)
-            print_progress("Analyzing videos", index, len(paths))
+            if workers == 1:
+                for original_index, path in to_analyze:
+                    try:
+                        info = analyze_one_video(
+                            path=path,
+                            ffmpeg=ffmpeg,
+                            ffprobe=ffprobe,
+                            sample_points=sample_points,
+                            ffmpeg_timeout=ffmpeg_timeout,
+                            ffprobe_timeout=ffprobe_timeout,
+                        )
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as ex:
+                        info = make_error_info(path, str(ex))
 
-        conn.commit()
-        clear_progress_line()
+                    infos_by_index[original_index] = info
+                    set_cache(conn, info, sample_points_key)
+                    done += 1
+
+                    if done - last_commit >= 25:
+                        conn.commit()
+                        last_commit = done
+
+                    if done == 1 or done % 25 == 0 or done == len(to_analyze):
+                        elapsed = time.time() - start_time
+                        rate = done / elapsed if elapsed > 0 else 0
+                        print_progress(
+                            "Analyzing videos",
+                            done,
+                            len(to_analyze),
+                        )
+                        print(f" | {rate:.2f}/sec | Workers: {workers}", end="", flush=True)
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    future_map = {
+                        executor.submit(
+                            analyze_one_video,
+                            path=path,
+                            ffmpeg=ffmpeg,
+                            ffprobe=ffprobe,
+                            sample_points=sample_points,
+                            ffmpeg_timeout=ffmpeg_timeout,
+                            ffprobe_timeout=ffprobe_timeout,
+                        ): (original_index, path)
+                        for original_index, path in to_analyze
+                    }
+
+                    for future in concurrent.futures.as_completed(future_map):
+                        original_index, path = future_map[future]
+                        try:
+                            info = future.result()
+                        except KeyboardInterrupt:
+                            raise
+                        except Exception as ex:
+                            info = make_error_info(path, str(ex))
+
+                        infos_by_index[original_index] = info
+                        set_cache(conn, info, sample_points_key)
+                        done += 1
+
+                        if done - last_commit >= 25:
+                            conn.commit()
+                            last_commit = done
+
+                        if done == 1 or done % 25 == 0 or done == len(to_analyze):
+                            elapsed = time.time() - start_time
+                            rate = done / elapsed if elapsed > 0 else 0
+                            print_progress(
+                                "Analyzing videos",
+                                done,
+                                len(to_analyze),
+                            )
+                            print(f" | {rate:.2f}/sec | Workers: {workers}", end="", flush=True)
+
+            conn.commit()
+            clear_progress_line()
+
+        print(f"Video direct cache hits:    {direct_hits:,}")
+        print(f"Video filename cache hits:  {filename_hits:,}")
+        print(f"Videos analyzed this run:   {len(to_analyze):,}")
+
     finally:
         conn.close()
 
-    return infos
+    return [infos_by_index[i] for i in range(len(paths))]
 
 
 def hamming(a: int, b: int) -> int:
@@ -1169,6 +1416,9 @@ def analyze_mode(args: argparse.Namespace) -> int:
     print(f"Sample points:         {','.join(str(x) for x in sample_points)}")
     print(f"Duration tolerance:    {args.duration_tolerance_seconds}s or {args.duration_tolerance_percent}%")
     print(f"Date modified close:   <= {args.date_modified_tolerance_days} day(s)")
+    print(f"Workers:               {int(args.workers)}")
+    print(f"Filename-only cache:   {'Yes' if args.ignore_full_root_comparison else 'No'}")
+    print(f"Cache debug rows:      {int(args.cache_debug)}")
     print()
 
     print("Scanning for video files...")
@@ -1189,6 +1439,9 @@ def analyze_mode(args: argparse.Namespace) -> int:
         ffmpeg_timeout=int(args.ffmpeg_timeout_seconds),
         ffprobe_timeout=int(args.ffprobe_timeout_seconds),
         rebuild_cache=bool(args.rebuild_cache),
+        ignore_full_root_comparison=bool(args.ignore_full_root_comparison),
+        workers=int(args.workers),
+        cache_debug=int(args.cache_debug),
     )
 
     ok_infos = [i for i in infos if i.status == "OK"]
@@ -1332,7 +1585,7 @@ def process_mode(args: argparse.Namespace) -> int:
         video_path = Path(video_path_text)
 
         sidecar_text = (row.get("SidecarPath") or "").strip()
-        sidecar_path = Path(sidecar_text) if sidecar_text else sidecar_path_for_video(video_path)
+        sidecar_candidates = sidecar_candidates_for_video(video_path, sidecar_text)
 
         status_parts = []
         note_parts = []
@@ -1344,8 +1597,14 @@ def process_mode(args: argparse.Namespace) -> int:
         elif args.whatif:
             status = "WHATIF"
             note = f"Would delete video: {video_path}"
-            if not args.no_sidecars and sidecar_path.exists():
-                note += f" | Would delete sidecar: {sidecar_path}"
+            if not args.no_sidecars:
+                existing_sidecars = [p for p in sidecar_candidates if p.exists()]
+                if existing_sidecars:
+                    for sidecar in existing_sidecars:
+                        sidecars_deleted += 1
+                        note += f" | Would delete sidecar: {sidecar}"
+                else:
+                    note += " | Sidecar: not found."
         else:
             ok_video, msg_video = delete_path(video_path, permanent=bool(args.permanent_delete))
             if ok_video:
@@ -1357,18 +1616,21 @@ def process_mode(args: argparse.Namespace) -> int:
             note_parts.append(f"Video: {msg_video}")
 
             if not args.no_sidecars:
-                if sidecar_path.exists():
-                    ok_sidecar, msg_sidecar = delete_path(sidecar_path, permanent=bool(args.permanent_delete))
-                    if ok_sidecar:
-                        sidecars_deleted += 1
-                        status_parts.append("SIDECAR_DELETED")
-                    else:
-                        errors += 1
-                        status_parts.append("ERROR_SIDECAR")
-                    note_parts.append(f"Sidecar: {msg_sidecar}")
+                existing_sidecars = [p for p in sidecar_candidates if p.exists()]
+                if existing_sidecars:
+                    for sidecar in existing_sidecars:
+                        ok_sidecar, msg_sidecar = delete_path(sidecar, permanent=bool(args.permanent_delete))
+                        if ok_sidecar:
+                            sidecars_deleted += 1
+                            status_parts.append("SIDECAR_DELETED")
+                        else:
+                            errors += 1
+                            status_parts.append("ERROR_SIDECAR")
+                        note_parts.append(f"Sidecar {sidecar}: {msg_sidecar}")
                 else:
                     status_parts.append("NO_SIDECAR")
-                    note_parts.append("Sidecar: not found.")
+                    searched = "; ".join(str(p) for p in sidecar_candidates)
+                    note_parts.append(f"Sidecar: not found. Checked: {searched}")
 
             status = ";".join(status_parts)
             note = " | ".join(note_parts)
@@ -1411,6 +1673,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-FFprobe", "--ffprobe", default="", help="Path to ffprobe.exe. Defaults to ffprobe in PATH.")
     parser.add_argument("-Limit", "--limit", type=int, default=0, help="Limit videos for testing. 0 means no limit.")
     parser.add_argument("-RebuildCache", "--rebuild-cache", action="store_true", help="Ignore cached video hash results and rebuild them.")
+    parser.add_argument("-Workers", "--workers", type=int, default=1, help="Worker threads for video decoding/hashing on cache misses. Each worker can launch FFmpeg/FFprobe, so start with 2-4.")
+    parser.add_argument("-IgnoreFullRootComparison", "--ignore-full-root-comparison", action="store_true", help="When the exact full-path cache lookup misses, reuse a cached entry by filename only. Ignores root, parent folders, file size, and Date Modified. Use only when archive filenames are unique/stable.")
+    parser.add_argument("-CacheDebug", "--cache-debug", type=int, default=0, help="Print the first N cache lookup decisions, including filename hits and misses. 0 disables detailed cache debug output.")
     parser.add_argument("-SkipDirName", "--skip-dir-name", action="append", default=[], help="Directory name to skip. Can be used multiple times.")
 
     parser.add_argument("-SamplePoints", "--sample-points", default=DEFAULT_SAMPLE_POINTS, help="Comma-separated video duration fractions to sample, e.g. 0.10,0.25,0.50,0.75,0.90.")
